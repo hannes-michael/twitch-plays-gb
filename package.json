@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "Twitch Plays GB — local Game Boy/GBC/GBA chat-driven emulator for OBS streaming",
   "license": "MIT",
+  "author": {
+    "name": "Hannes Michael",
+    "email": "hannes@hannes-michael.dev"
+  },
   "private": true,
   "type": "module",
   "engines": {
@@ -59,7 +63,8 @@
         "AppImage",
         "deb"
       ],
-      "category": "Game"
+      "category": "Game",
+      "maintainer": "Hannes Michael <hannes@hannes-michael.dev>"
     },
     "win": {
       "target": [
