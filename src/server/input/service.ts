@@ -9,7 +9,7 @@ import type {
   InputStats,
 } from '../../shared/input';
 import type { ChatService } from '../chat/service';
-import type { EmulatorService } from '../emulator/service';
+import { EmulatorNotRunningError, type EmulatorService } from '../emulator/service';
 import type { Logger } from '../logger';
 import { parseChatCommand } from './command-parser';
 
@@ -299,9 +299,12 @@ export class InputService {
             this.timings.releaseFrames,
           );
         } catch (error) {
-          if (this.emulator.status().status !== 'running') {
-            // A stop raced the press. Keep the input for the next start instead
-            // of turning a dashboard action into a user-visible drop.
+          if (
+            error instanceof EmulatorNotRunningError ||
+            this.emulator.status().status !== 'running'
+          ) {
+            // A stop/cancel raced the press. Keep the input for the next start
+            // instead of turning a dashboard action into a user-visible drop.
             event.status = 'queued';
             this.publish();
             this.logger.debug(`input press interrupted by emulator stop: ${String(error)}`);

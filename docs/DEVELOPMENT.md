@@ -109,14 +109,21 @@ cartridge has a battery. Save states live in `<dataDir>/states/<key>.state` with
 one previous generation at `<key>.state.prev`. Imported ROMs use their 64-hex
 `romId` as the key; a `--rom` session uses `rom-<first 16 hex of the ROM's
 sha256>`, so the saves survive moving or renaming the file. A state is written
-through a temp file and rotated, so a crash always leaves one loadable file.
+through a temp file and rotated, so a crash always leaves one loadable
+generation. Leftover temp files are removed when the ROM starts.
 
 States are saved every 60 seconds by default (configurable), on Stop, Restart,
 ROM change, server quit, and through the dashboard **Save now** button or the
 broadcaster/mod `!save` command. On boot the newest valid state is restored,
-falling back to the previous generation when the current file is corrupt. A
-restart boots a fresh session after saving the old one. The vendored fixture
-ROMs have no battery-backed SRAM, so battery saves legitimately write no file.
+falling back to the previous generation when the current file is corrupt. After
+a fallback, the next save discards the corrupt current instead of replacing the
+valid previous generation; the new current is installed atomically before the
+previous is removed on a later normal save. The status reports `lastFrameIndex`
+from the restored emulator core, so a restart resumes at the saved frame rather
+than a fresh boot. A long chat input press is cancelled before Stop/quit so the
+save fits inside the shutdown timeout. A restart boots a fresh session after
+saving the old one. The vendored fixture ROMs have no battery-backed SRAM, so
+battery saves legitimately write no file.
 
 ## Chat source and anarchy input
 
@@ -466,7 +473,7 @@ shows:
 - fake/Twitch chat source, connection status, channel, and message count;
 - live input mode, queue length, accepted/executed/dropped totals, and the last
   drop reason;
-- last save time/count, restore source, and autosave interval;
+- last save time/count, restore source, last frame index, and autosave interval;
 - resolved democracy window, hold/release frames, and input cooldown, queue,
   rate, and stale timings.
 

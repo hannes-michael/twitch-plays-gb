@@ -80,7 +80,8 @@ always passes a fresh temp directory through `--data-dir` and deletes it on
 teardown. Never point tests at your real data directory. To simulate a server
 restart, create a directory with `mkdtemp`, pass `dataDir` to `startServer` with
 `cleanupDataDir: false`, stop and start the process again, then remove the
-directory yourself.
+directory yourself. `server.crash()` SIGKILLs a process and keeps its data
+directory for crash-window scenarios.
 
 The vendored ROMs under `tests/fixtures/roms/` boot through the normal `--rom`
 config path:
@@ -131,15 +132,24 @@ No test connects to real Twitch.
 
 `saves.spec.ts` reuses one temp data directory across server restarts with
 `TPG_AUTOSAVE_INTERVAL_MS=250`. It waits for two autosaved generations
-(`states/<romId>.state` and `.prev`), restarts and asserts
-`restoredFrom: "current"`, then corrupts the current file after shutdown and
-asserts fallback to `"previous"` while the emulator keeps running. The second
-scenario drives the dashboard Save button, `/api/emulator/save`, a moderator
-`!save` versus a regular viewer's ignored attempt, and save-on-stop followed by
-a restore on the next start. Status/settings/debug JSON must not contain the
-data directory. The vendored fixture ROMs have no battery-backed SRAM, so no
-battery file is expected; save states are covered instead of fabricated battery
-data.
+(`states/<romId>.state` and `.prev`), saves a known frame index, restarts and
+asserts both `restoredFrom: "current"` and a restored `lastFrameIndex` at or
+after the saved frame (not a fresh boot). It then corrupts the current file
+after shutdown and asserts fallback to `"previous"`. A further save after that
+fallback is followed by a simulated SIGKILL (`server.crash()`), corruption of
+the new current state, and a restart that must still restore `"previous"`;
+orphan `.tmp` files must be cleaned up. The second scenario drives the
+dashboard Save button, `/api/emulator/save`, a moderator `!save` versus a
+regular viewer's ignored attempt, save-on-stop, and a SIGTERM quit save with a
+one-hour autosave interval (proved by the quit log and a changed state mtime).
+The third scenario holds `!a` for 600+600 frames and SIGTERMs the server,
+proving the active press is cancelled and the quit save still completes without
+SIGKILL. The fourth breaks the states directory, then asserts the save failure
+is sanitized in status/debug, the dashboard shows a failure instead of "No
+running emulator", and the Save button is disabled while stopped. Status/
+settings/debug JSON must not contain the data directory. The vendored fixture
+ROMs have no battery-backed SRAM, so no battery file is expected; save states
+are covered instead of fabricated battery data.
 
 `setup-import.spec.ts` is the first-run scenario: it checks the legal notice and
 channel step, rejects invalid ROM uploads, imports the vendored GB ROM through

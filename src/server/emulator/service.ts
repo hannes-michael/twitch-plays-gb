@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
-import { basename, dirname, extname } from 'node:path';
-import { EmulatorController, GB_FPS, ResamplingMediaSink, type RomInfo } from 'node-mgba';
+import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, extname, join } from 'node:path';
+import {
+  EmulatorController,
+  GB_FPS,
+  ResamplingMediaSink,
+  type RomInfo,
+  type SequenceHandle,
+} from 'node-mgba';
 import type WebSocket from 'ws';
 import { CONFIG_DEFAULTS } from '../../shared/config';
 import {
@@ -100,6 +106,8 @@ export class EmulatorService {
   private lastSessionStatePath: string | null = null;
   private stateSavePath: string | null = null;
   private batterySavePath: string | null = null;
+  private currentStateCorrupt = false;
+  private activePress: { handle: SequenceHandle; cancelled: boolean } | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
   private closePromise: Promise<boolean> | null = null;
   private autosaveTimer: NodeJS.Timeout | null = null;
@@ -118,6 +126,7 @@ export class EmulatorService {
       fps: this.lifecycle.status === 'running' && this.controller ? this.controller.currentFps : 0,
       videoFrames: this.hub.videoFrames,
       audioChunks: this.hub.audioChunks,
+      lastFrameIndex: this.hub.lastFrameIndex,
       audioSampleRate: this.hub.audioSampleRate,
       droppedVideoFrames: this.hub.droppedVideoFrames,
       droppedAudioChunks: this.hub.droppedAudioChunks,
@@ -142,16 +151,23 @@ export class EmulatorService {
 
   start(options: EmulatorStartOptions): Promise<void> {
     if (this.closing) return Promise.resolve();
+    const sameSession =
+      this.controller !== null &&
+      this.lifecycle.status === 'running' &&
+      this.lifecycle.romId === (options.romId ?? null);
+    if (!sameSession) this.cancelActivePress('emulator start');
     return this.enqueue(() => this.startInternal(options));
   }
 
   stop(): Promise<boolean> {
     if (this.closePromise) return this.closePromise.then(() => false);
+    this.cancelActivePress('emulator stop');
     return this.enqueue(() => this.stopInternal('stop'));
   }
 
   restart(options: EmulatorStartOptions): Promise<void> {
     if (this.closing) return Promise.resolve();
+    this.cancelActivePress('emulator restart');
     return this.enqueue(async () => {
       await this.stopInternal('restart');
       if (this.closing) return;
@@ -193,14 +209,43 @@ export class EmulatorService {
       }
 
       const handle = controller.pressButtons([{ button, holdFrames, releaseFrames }]);
-      await handle.promise;
+      const active = { handle, cancelled: false };
+      this.activePress = active;
+
+      try {
+        await handle.promise;
+      } catch (error) {
+        if (active.cancelled) throw new EmulatorNotRunningError();
+        throw error;
+      } finally {
+        if (this.activePress === active) this.activePress = null;
+      }
     });
+  }
+
+  /**
+   * Cancels a press before a lifecycle request enqueues its stop/save. Without
+   * this, a 600-frame hold can outlive the server's 5-second shutdown budget
+   * and force-exit before the quit save runs.
+   */
+  private cancelActivePress(reason: string): void {
+    const active = this.activePress;
+    if (!active || active.cancelled) return;
+
+    active.cancelled = true;
+    try {
+      active.handle.cancel(reason);
+      this.logger.info(`cancelled active input press (${reason})`);
+    } catch (error) {
+      this.logger.warn(`failed to cancel active input press: ${(error as Error).message}`);
+    }
   }
 
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise.then(() => undefined);
 
     this.closing = true;
+    this.cancelActivePress('server shutdown');
     const run = this.enqueue(() => this.stopInternal('quit'));
     this.closePromise = run;
     return run.then(() => undefined);
@@ -242,10 +287,12 @@ export class EmulatorService {
     this.hub.resetCounters();
     this.stateSavePath = nextStatePath;
     this.batterySavePath = options.batterySavePath ?? null;
+    this.currentStateCorrupt = false;
     this.saveInfo.restoredFrom = null;
     this.saveInfo.lastSaveError = null;
     this.saveInfo.autosaveIntervalMs =
       options.autosaveIntervalMs ?? CONFIG_DEFAULTS.timings.autosaveIntervalMs;
+    if (nextStatePath) await this.removeStaleTempFiles(nextStatePath);
     this.lifecycle = { ...createStoppedEmulatorStatus(), status: 'starting', romId };
     this.publish();
 
@@ -386,16 +433,23 @@ export class EmulatorService {
       const info = await stat(temporary);
       if (info.size === 0) throw new Error('save state file is empty');
 
-      // The current file is only replaced after the new one is complete. A
-      // crash between the two renames leaves the previous generation intact.
-      await rm(previous, { force: true });
-      try {
-        await rename(statePath, previous);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // The current file is only replaced after the new one is complete. If
+      // the current file was corrupt (we restored the previous generation),
+      // discard it without promoting it: the valid previous stays until the
+      // new current has been installed.
+      if (this.currentStateCorrupt) {
+        await rm(statePath, { force: true });
+      } else {
+        await rm(previous, { force: true });
+        try {
+          await rename(statePath, previous);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
       }
       await rename(temporary, statePath);
 
+      this.currentStateCorrupt = false;
       this.saveInfo.saveCount += 1;
       this.saveInfo.lastSavedAt = new Date().toISOString();
       this.saveInfo.lastSaveError = null;
@@ -403,10 +457,14 @@ export class EmulatorService {
       this.publish();
       return true;
     } catch (error) {
+      const batteryPath = this.batterySavePath ?? undefined;
       const message = sanitizeError(error, [
         statePath,
+        `${statePath}.prev`,
         temporary,
-        this.batterySavePath ?? undefined,
+        batteryPath,
+        dirname(statePath),
+        batteryPath ? dirname(batteryPath) : undefined,
       ]);
       this.saveInfo.lastSaveError = message;
       this.logger.warn(`failed to save emulator state (${reason}): ${message}`);
@@ -417,53 +475,82 @@ export class EmulatorService {
     }
   }
 
+  /**
+   * Removes leftover temp files from an interrupted save. They are never part
+   * of the rotation and would otherwise accumulate after crashes.
+   */
+  private async removeStaleTempFiles(statePath: string): Promise<void> {
+    const directory = dirname(statePath);
+    const prefix = `${basename(statePath)}.`;
+    try {
+      const names = await readdir(directory);
+      await Promise.all(
+        names
+          .filter((name) => name.startsWith(prefix) && name.endsWith('.tmp'))
+          .map((name) => rm(join(directory, name), { force: true })),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.logger.debug(`could not remove stale save-state temps: ${(error as Error).message}`);
+      }
+    }
+  }
+
   private async restoreStateInternal(
     controller: EmulatorController,
     statePath: string,
   ): Promise<EmulatorRestoreSource | null> {
-    const candidates: Array<{ source: EmulatorRestoreSource; path: string }> = [
-      { source: 'current', path: statePath },
-      { source: 'previous', path: `${statePath}.prev` },
-    ];
+    const candidates: EmulatorRestoreSource[] = ['current', 'previous'];
 
-    for (const candidate of candidates) {
+    for (const source of candidates) {
+      const path = source === 'current' ? statePath : `${statePath}.prev`;
       let modifiedAt: Date;
       try {
-        const info = await stat(candidate.path);
+        const info = await stat(path);
         if (info.size === 0) {
-          this.logger.debug(`ignoring empty ${candidate.source} save state`);
+          this.logger.debug(`ignoring empty ${source} save state`);
           continue;
         }
         modifiedAt = info.mtime;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          this.logger.debug(`no ${candidate.source} save state found`);
+          this.logger.debug(`no ${source} save state found`);
           continue;
         }
         this.logger.warn(
-          `could not inspect ${candidate.source} save state: ${sanitizeError(error, [candidate.path])}`,
+          `could not inspect ${source} save state: ${sanitizeError(error, [dirname(path), path])}`,
         );
         continue;
       }
 
       try {
-        const loaded = await controller.loadState(candidate.path);
+        const loaded = await controller.loadState(path);
         if (!loaded) {
-          this.logger.warn(`could not load ${candidate.source} save state; trying the next one`);
+          this.logger.warn(`could not load ${source} save state; trying the next one`);
           continue;
         }
 
-        this.saveInfo.restoredFrom = candidate.source;
+        this.saveInfo.restoredFrom = source;
         this.saveInfo.lastSavedAt = modifiedAt.toISOString();
-        this.logger.info(`restored emulator state (${candidate.source})`);
-        return candidate.source;
+        // The current file is known bad when we fall back, so the next save
+        // must not promote it into the previous generation.
+        this.currentStateCorrupt = source === 'previous';
+        try {
+          const frameIndex = await controller.client?.getFrameCounter();
+          if (typeof frameIndex === 'number') this.hub.setLastFrameIndex(frameIndex);
+        } catch (error) {
+          this.logger.debug(`could not read restored frame counter: ${(error as Error).message}`);
+        }
+        this.logger.info(`restored emulator state (${source})`);
+        return source;
       } catch (error) {
         this.logger.warn(
-          `could not load ${candidate.source} save state: ${sanitizeError(error, [candidate.path])}`,
+          `could not load ${source} save state: ${sanitizeError(error, [dirname(path), path])}`,
         );
       }
     }
 
+    this.currentStateCorrupt = false;
     this.logger.info('no valid save state found; starting a fresh session');
     return null;
   }

@@ -21,6 +21,7 @@ export class MediaHub implements MediaSink {
   audioChunks = 0;
   droppedVideoFrames = 0;
   droppedAudioChunks = 0;
+  lastFrameIndex = 0;
   audioSampleRate = AUDIO_TARGET_SAMPLE_RATE;
 
   private readonly clients = new Set<WebSocket>();
@@ -35,7 +36,13 @@ export class MediaHub implements MediaSink {
     this.audioChunks = 0;
     this.droppedVideoFrames = 0;
     this.droppedAudioChunks = 0;
+    this.lastFrameIndex = 0;
     this.audioSampleRate = AUDIO_TARGET_SAMPLE_RATE;
+  }
+
+  /** Aligns the observable frame counter with a restored core state. */
+  setLastFrameIndex(frameIndex: number): void {
+    if (Number.isFinite(frameIndex) && frameIndex >= 0) this.lastFrameIndex = frameIndex;
   }
 
   attachClient(socket: WebSocket): void {
@@ -48,6 +55,7 @@ export class MediaHub implements MediaSink {
 
   onVideoFrame(packet: VideoPacket): void {
     this.videoFrames += 1;
+    this.lastFrameIndex = packet.frameIndex;
 
     try {
       this.broadcast(

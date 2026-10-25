@@ -28,6 +28,7 @@ export interface EmulatorStatus {
   lastError: string | null;
   lastSavedAt: string | null;
   saveCount: number;
+  lastFrameIndex: number;
   restoredFrom: EmulatorRestoreSource | null;
   lastSaveError: string | null;
   autosaveIntervalMs: number;
@@ -52,6 +53,7 @@ export function createStoppedEmulatorStatus(): EmulatorStatus {
     lastError: null,
     lastSavedAt: null,
     saveCount: 0,
+    lastFrameIndex: 0,
     restoredFrom: null,
     lastSaveError: null,
     autosaveIntervalMs: 0,
