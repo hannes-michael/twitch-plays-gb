@@ -245,6 +245,28 @@ export default function DeveloperPanel() {
               <dd data-testid="debug-queue-votes">{snapshot.queue.votes}</dd>
             </div>
             <div>
+              <dt>Input mode</dt>
+              <dd data-testid="debug-input-mode">{snapshot.input.mode}</dd>
+            </div>
+            <div>
+              <dt>Inputs accepted</dt>
+              <dd data-testid="debug-input-accepted">{snapshot.input.stats.accepted}</dd>
+            </div>
+            <div>
+              <dt>Inputs executed</dt>
+              <dd data-testid="debug-input-executed">{snapshot.input.stats.executed}</dd>
+            </div>
+            <div>
+              <dt>Inputs dropped</dt>
+              <dd data-testid="debug-input-dropped">{snapshot.input.stats.dropped}</dd>
+            </div>
+            <div>
+              <dt>Last drop</dt>
+              <dd data-testid="debug-input-last-drop">
+                {snapshot.input.lastDrop?.reason ?? 'none'}
+              </dd>
+            </div>
+            <div>
               <dt>Democracy window</dt>
               <dd>
                 <span data-testid="debug-democracy-window">
@@ -260,6 +282,27 @@ export default function DeveloperPanel() {
             <div>
               <dt>Release frames</dt>
               <dd data-testid="debug-release-frames">{snapshot.timings.releaseFrames}</dd>
+            </div>
+            <div>
+              <dt>Input cooldown</dt>
+              <dd>
+                <span data-testid="debug-input-cooldown">{snapshot.timings.inputCooldownMs}</span>{' '}
+                ms
+              </dd>
+            </div>
+            <div>
+              <dt>Input queue cap</dt>
+              <dd data-testid="debug-input-max-queue">{snapshot.timings.inputMaxQueue}</dd>
+            </div>
+            <div>
+              <dt>Input rate cap</dt>
+              <dd data-testid="debug-input-max-rate">{snapshot.timings.inputMaxPerSecond}/s</dd>
+            </div>
+            <div>
+              <dt>Input stale</dt>
+              <dd>
+                <span data-testid="debug-input-stale">{snapshot.timings.inputStaleMs}</span> ms
+              </dd>
             </div>
           </dl>
         </article>
