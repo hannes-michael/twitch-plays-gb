@@ -23,6 +23,7 @@ blob-report/
 coverage/
 
 # Runtime data, ROMs, and saves
+/roms/
 data/
 logs/
 *.log
