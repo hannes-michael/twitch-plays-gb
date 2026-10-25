@@ -1,7 +1,14 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AppMode } from '@shared/debug';
-import type { EmulatorLifecycleStatus } from '@shared/emulator-status';
+import {
+  createStoppedEmulatorStatus,
+  type EmulatorLifecycleStatus,
+  type EmulatorStatus,
+} from '@shared/emulator-status';
+import type { EmulatorOperationResponse, SettingsResponse } from '@shared/settings';
+import Dashboard, { type EmulatorOperation } from './Dashboard';
 import DeveloperPanel from './DeveloperPanel';
+import SetupWizard from './SetupWizard';
 
 type ServerStatus = 'checking' | 'online' | 'offline';
 
@@ -15,14 +22,21 @@ interface HealthResponse {
 }
 
 const HEALTH_POLL_INTERVAL_MS = 2_000;
-const HEALTH_REQUEST_TIMEOUT_MS = 1_500;
+const EMULATOR_POLL_INTERVAL_MS = 1_000;
+const REQUEST_TIMEOUT_MS = 1_500;
+const SETTINGS_TIMEOUT_MS = 3_000;
 
 export default function App() {
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const [serverVersion, setServerVersion] = useState<string | null>(null);
   const [appMode, setAppMode] = useState<AppMode | null>(null);
-  const [channel, setChannel] = useState('');
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [emulator, setEmulator] = useState<EmulatorStatus>(createStoppedEmulatorStatus);
+  const [reconfiguring, setReconfiguring] = useState(false);
+  const [operation, setOperation] = useState<EmulatorOperation | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const statusEpoch = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -30,7 +44,7 @@ export default function App() {
 
     const checkHealth = async () => {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), HEALTH_REQUEST_TIMEOUT_MS);
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       try {
         const response = await fetch('/health', {
@@ -69,16 +83,119 @@ export default function App() {
     };
   }, []);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmedChannel = channel.trim();
-    if (!trimmedChannel) {
-      setNotice('Enter a Twitch channel to continue.');
-      return;
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SETTINGS_TIMEOUT_MS);
+
+    const loadSettings = async (): Promise<void> => {
+      try {
+        const response = await fetch('/api/settings', {
+          signal: controller.signal,
+          headers: { accept: 'application/json' },
+        });
+        if (!response.ok) throw new Error(`Settings request failed with HTTP ${response.status}`);
+        const body = (await response.json()) as SettingsResponse;
+        if (!active) return;
+        setSettings(body);
+        setSettingsError(null);
+      } catch {
+        if (active) setSettingsError('Could not load the local setup state.');
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    void loadSettings();
+
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const pollStatus = async (): Promise<void> => {
+      const epoch = statusEpoch.current;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+      try {
+        const response = await fetch('/api/emulator/status', {
+          signal: controller.signal,
+          headers: { accept: 'application/json' },
+        });
+        if (!response.ok) return;
+        const next = (await response.json()) as EmulatorStatus;
+        if (active && epoch === statusEpoch.current) setEmulator(next);
+      } catch {
+        // Transient status failures stay quiet; the server-status chip already
+        // reports an unreachable server.
+      } finally {
+        clearTimeout(timeout);
+        if (active) {
+          timer = setTimeout(pollStatus, EMULATOR_POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    void pollStatus();
+
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  const runEmulatorOperation = async (nextOperation: EmulatorOperation): Promise<void> => {
+    if (!settings || operation !== null) return;
+
+    setOperation(nextOperation);
+    setNotice(null);
+    statusEpoch.current += 1;
+
+    try {
+      const response = await fetch(`/api/emulator/${nextOperation}`, {
+        method: 'POST',
+        headers:
+          nextOperation === 'stop'
+            ? { accept: 'application/json' }
+            : { 'content-type': 'application/json', accept: 'application/json' },
+        body: nextOperation === 'stop' ? undefined : JSON.stringify({ romId: settings.romId }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        (EmulatorOperationResponse & { error?: string }) | null;
+
+      if (!response.ok || !body?.status) {
+        setNotice(
+          body?.error ?? `Could not ${nextOperation} the emulator (HTTP ${response.status}).`,
+        );
+        return;
+      }
+
+      statusEpoch.current += 1;
+      setEmulator(body.status);
+    } catch {
+      setNotice('Could not reach the local server.');
+    } finally {
+      setOperation(null);
     }
-    setNotice(
-      'Twitch connection is not available yet. Nothing was saved; this setup step is a preview for a later build.',
-    );
+  };
+
+  const handleSetupComplete = (
+    next: SettingsResponse,
+    status: EmulatorStatus | null,
+    setupNotice?: string,
+  ): void => {
+    statusEpoch.current += 1;
+    setSettings(next);
+    if (status) setEmulator(status);
+    setReconfiguring(false);
+    setNotice(setupNotice ?? null);
   };
 
   const statusLabel =
@@ -103,52 +220,41 @@ export default function App() {
         </div>
       </header>
 
-      <section className="setup-card" aria-labelledby="setup-title">
-        <h2 id="setup-title">First-run setup</h2>
-        <p className="lede">
-          Run Game Boy, GBC, and GBA games locally and let Twitch chat play along. Start by telling
-          the app which channel will host the game.
-        </p>
-
-        <form className="setup-form" onSubmit={handleSubmit}>
-          <label htmlFor="channel">Twitch channel</label>
-          <div className="input-row">
-            <span className="input-prefix" aria-hidden="true">
-              twitch.tv/
-            </span>
-            <input
-              id="channel"
-              name="channel"
-              type="text"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="your_channel"
-              value={channel}
-              onChange={(event) => setChannel(event.target.value)}
-            />
-          </div>
-          <p className="field-hint">
-            Use the channel name without the leading #. This form is a preview and does not connect
-            or save yet.
-          </p>
-          <button type="submit" className="primary-action">
-            Continue
-          </button>
-          {notice ? (
-            <p className="notice" role="status">
-              {notice}
-            </p>
+      {settings === null ? (
+        <section className="setup-card" aria-labelledby="setup-title">
+          <h2 id="setup-title">First-run setup</h2>
+          <p className="lede">{settingsError ?? 'Loading local setup…'}</p>
+          {settingsError ? (
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => window.location.reload()}
+            >
+              Retry
+            </button>
           ) : null}
-        </form>
-
-        <aside className="legal-notice" aria-label="Legal notice">
-          <strong>Before you start</strong>
-          <p>
-            You must supply your own legally obtained ROMs. Not affiliated with Nintendo, Game
-            Freak, or Twitch.
-          </p>
-        </aside>
-      </section>
+        </section>
+      ) : !settings.firstRun && !reconfiguring ? (
+        <Dashboard
+          settings={settings}
+          emulator={emulator}
+          busy={operation}
+          notice={notice}
+          onOperation={(nextOperation) => void runEmulatorOperation(nextOperation)}
+          onReconfigure={() => {
+            setNotice(null);
+            setReconfiguring(true);
+          }}
+        />
+      ) : (
+        <SetupWizard
+          initialChannel={settings.channel}
+          initialRomId={settings.romId}
+          cancelable={!settings.firstRun}
+          onCancel={() => setReconfiguring(false)}
+          onComplete={handleSetupComplete}
+        />
+      )}
 
       {appMode === 'dev' || appMode === 'test' ? <DeveloperPanel /> : null}
     </main>

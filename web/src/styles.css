@@ -508,3 +508,225 @@ h1 {
   outline: 3px solid var(--accent-strong);
   outline-offset: 2px;
 }
+
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.4rem;
+  padding: 0.7rem 1.1rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.8rem;
+  background: rgb(7 12 26 / 75%);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.secondary-action:hover {
+  border-color: var(--accent);
+}
+
+.secondary-action:focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.rom-import h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+.rom-import input[type='file'] {
+  width: 100%;
+  padding: 0.65rem;
+  border: 1px dashed var(--panel-border);
+  border-radius: 0.7rem;
+  background: rgb(7 12 26 / 55%);
+  color: var(--text);
+  font: inherit;
+}
+
+.drop-zone {
+  display: grid;
+  gap: 0.2rem;
+  padding: 1rem;
+  border: 1px dashed var(--panel-border);
+  border-radius: 0.8rem;
+  background: rgb(139 92 246 / 6%);
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.86rem;
+}
+
+.drop-zone strong {
+  color: var(--text);
+}
+
+.rom-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rom-option {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.8rem;
+  background: rgb(7 12 26 / 55%);
+  cursor: pointer;
+}
+
+.rom-option:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(139 92 246 / 20%);
+}
+
+.rom-option input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent);
+}
+
+.rom-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.rom-copy strong {
+  overflow-wrap: anywhere;
+}
+
+.rom-meta {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.review-list,
+.dashboard-meta {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0 0 1.25rem;
+}
+
+.review-list > div,
+.dashboard-meta > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.7rem;
+  background: rgb(7 12 26 / 55%);
+}
+
+.review-list dt,
+.dashboard-meta dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.review-list dd,
+.dashboard-meta dd {
+  margin: 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.dashboard-heading h2 {
+  margin: 0 0 0.75rem;
+}
+
+.emulator-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: rgb(7 12 26 / 75%);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.emulator-running .status-dot {
+  background: var(--online);
+}
+
+.emulator-starting .status-dot {
+  background: var(--checking);
+}
+
+.emulator-stopped .status-dot {
+  background: var(--muted);
+}
+
+.emulator-error {
+  color: var(--offline);
+}
+
+.emulator-error .status-dot {
+  background: var(--offline);
+}
+
+.dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.dashboard-actions .primary-action,
+.dashboard-actions .secondary-action {
+  margin-top: 0;
+}
+
+@media (max-width: 560px) {
+  .wizard-actions,
+  .dashboard-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .wizard-actions .primary-action,
+  .wizard-actions .secondary-action,
+  .dashboard-actions .primary-action,
+  .dashboard-actions .secondary-action {
+    width: 100%;
+  }
+}

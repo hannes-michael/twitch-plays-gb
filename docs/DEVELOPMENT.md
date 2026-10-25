@@ -76,6 +76,36 @@ dimensions, frame/audio counters, and 48 kHz audio state, and
 until a user gesture: click **Unmute audio** in the overlay (OBS Browser Source
 has its own audio-permission setting).
 
+## First-run setup, ROM library, and lifecycle
+
+When no channel and ROM are saved yet, the UI shows the first-run wizard:
+
+1. Twitch channel and legal notice.
+2. ROM import with a file picker or drag/drop.
+3. Review, **Finish setup**, then the dashboard.
+
+Imports are validated on the server. `POST /api/roms` accepts raw
+`application/octet-stream` bytes with an `x-filename` header; the file must be
+`.gb`, `.gbc`, or `.gba` (case-insensitive), 1 byte–32 MiB, and have a valid
+Nintendo logo (GB/GBC) or fixed `0x96` header byte (GBA). Client filenames are
+only sanitized display names. Disk files are always
+`<dataDir>/roms/<sha256>.<extension>`, and identical bytes deduplicate. ROM
+metadata is persisted in `<dataDir>/roms.json`; `GET /api/roms` and
+`GET /api/roms/:id` never expose filesystem paths.
+
+**Finish setup** writes `<dataDir>/settings.json` and explicitly starts the
+selected ROM. The dashboard-lite exposes Start, Stop, Restart, an OBS overlay
+link, and Reconfigure. `POST /api/emulator/start|stop|restart` are serialized by
+the emulator service and return `{ "status": ... }`. A failed boot returns HTTP
+200 with `status: "error"` and a sanitized `lastError`, so the server stays up
+and the UI can show the failure. On server start `--rom` wins over the saved
+ROM; the saved ROM starts when no `--rom` is given. A configured `--rom`
+reports `romId: null`.
+
+Battery-backed SRAM is flushed on stop to
+`<dataDir>/saves/<romId>.sav` when the cartridge has a battery. Autosave, save
+states, and restore are later P1 work.
+
 `tests/fixtures/roms/` contains open-source homebrew ROMs for automated tests;
 they are not playable games. See `NOTICE.md` there for licenses.
 
@@ -249,7 +279,22 @@ The server resolves its data directory in this order:
    deletes it on teardown.
 4. Production: the platform default:
    - Linux: `$XDG_DATA_HOME/twitch-plays-gb` or `~/.local/share/twitch-plays-gb`
-   - Windows: `%APPDATA%\twitch-plays-gb`
+   - Windows (standalone server): `%APPDATA%\twitch-plays-gb`
+   - Desktop shell on either platform: Electron's `userData` directory, passed
+     to the server child as `TPG_DATA_DIR` (for example
+     `%APPDATA%\Twitch Plays GB` on Windows).
+
+The server creates this layout on startup:
+
+```text
+<dataDir>/
+  config.json          # optional resolved configuration
+  settings.json        # channel + selected ROM (written by Finish setup)
+  roms.json            # imported ROM metadata (atomic)
+  roms/<sha256>.<ext>  # validated ROM files; client names are never used
+  saves/<romId>.sav    # battery-backed SRAM, flushed on stop
+  states/              # reserved for save states
+```
 
 The JSON config file is `<dataDir>/config.json` unless `--config` or
 `TPG_CONFIG` points elsewhere. The dev commands also keep Electron's Chromium

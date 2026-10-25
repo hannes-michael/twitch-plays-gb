@@ -5,15 +5,17 @@ streaming. The app runs an Electron desktop shell and a local server; OBS
 captures either the built-in Browser Source overlay or a dedicated capture
 window.
 
-> Status: walking skeleton. The config-driven server, first-run UI, Electron
-> shell (including a spawned server child and OBS capture window), one-command
-> dev workflow, local GB/GBC/GBA video/audio overlay, developer-only fake
-> chat/debug panel, OBS setup guide, and Linux AppImage/.deb builds are runnable.
-> Linux packaged builds pass a headless smoke test; Windows packaging is wired
-> for CI but has not been executed in the development environment. Twitch chat
-> and input queues are planned, and OBS capture is still a manual checklist. See
-> `PLAN.md` for the local implementation roadmap (not committed) and
-> `docs/TESTING.md` for the E2E-first workflow.
+> Status: walking skeleton plus first-run setup. The config-driven server,
+> validated ROM import, first-run wizard, dashboard lifecycle controls,
+> Electron shell (including a spawned server child and OBS capture window),
+> one-command dev workflow, local GB/GBC/GBA video/audio overlay,
+> developer-only fake chat/debug panel, OBS setup guide, and Linux
+> AppImage/.deb builds are runnable. Linux packaged builds pass a headless
+> smoke test; Windows packaging is wired for CI but has not been executed in
+> the development environment. Twitch chat and input queues are planned, and
+> OBS capture is still a manual checklist. See `PLAN.md` for the local
+> implementation roadmap (not committed) and `docs/TESTING.md` for the
+> E2E-first workflow.
 
 ## Requirements
 
@@ -24,15 +26,23 @@ window.
 
 ```bash
 npm install
-TPG_ROM=/path/to/game.gb npm run dev
+npm run dev
 ```
 
 `npm run dev` starts the server with embedded Vite HMR, waits for health, builds
-the desktop bundle, and opens Electron. The server listens on
-`http://127.0.0.1:3000` by default and prints `TPG_URL=...`. Run without
-`TPG_ROM` to open the setup screen only, or open
+the desktop bundle, and opens Electron. On first run the setup wizard asks for
+your Twitch channel and a ROM (`.gb`, `.gbc`, or `.gba`); imports are validated
+and stored in the app data directory. The server listens on
+`http://127.0.0.1:3000` by default and prints `TPG_URL=...`. Open
 `http://127.0.0.1:3000/overlay?client=obs` for the OBS overlay. Press `Ctrl+C`
 to stop everything.
+
+You can still boot a ROM through configuration, which wins over the saved
+selection:
+
+```bash
+TPG_ROM=/path/to/game.gb npm run dev
+```
 
 Browser-only development:
 

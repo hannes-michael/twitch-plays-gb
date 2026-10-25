@@ -98,6 +98,15 @@ native dimensions, frame/audio counters, 48 kHz audio, and `/health`.
 and pixels, growing counters, and the click-to-unmute audio path. Both wait on
 real status/counters with `expect.poll`; do not replace them with sleeps.
 
+`setup-import.spec.ts` is the first-run scenario: it checks the legal notice and
+channel step, rejects invalid ROM uploads, imports the vendored GB ROM through
+the file input, reviews and finishes setup, and then drives Stop, Start, and
+Restart from the dashboard. It asserts persisted settings, server-generated
+`roms/<id>.gb` filenames, duplicate deduplication, no absolute paths in API
+payloads, and no renderer page/console errors. `app-launch.spec.ts` separately
+checks that Continue advances to ROM import without writing settings before
+Finish.
+
 Production-mode checks use `startServer({ mode: 'production' })`, which runs the
 built `dist/server/index.js` with `TPG_TEST=0` against `dist/web`. The production
 spec builds both artifacts in `beforeAll` on every run, so stale output is never
