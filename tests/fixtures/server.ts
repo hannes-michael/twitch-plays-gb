@@ -43,6 +43,7 @@ export interface ServerFixture {
 
 export interface AppFixture {
   baseURL: string;
+  dataDir: string;
   page: Page;
   request: APIRequestContext;
 }
@@ -479,7 +480,7 @@ export const test = base.extend<Fixtures>({
       );
     }
 
-    await use({ baseURL: server.baseURL, page, request: server.request });
+    await use({ baseURL: server.baseURL, dataDir: server.dataDir, page, request: server.request });
   },
 });
 

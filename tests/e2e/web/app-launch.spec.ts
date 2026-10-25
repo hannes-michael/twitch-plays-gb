@@ -63,16 +63,21 @@ test.describe('app launch', () => {
     expect(encoded.status()).toBe(404);
   });
 
-  test('makes clear that the channel setup action is not persisted yet', async ({ app }) => {
+  test('advances to ROM import without persisting settings before Finish', async ({ app }) => {
+    const before = await app.request.get(`${app.baseURL}/api/settings`);
+    expect(before.status()).toBe(200);
+    expect(await before.json()).toEqual({ channel: null, romId: null, firstRun: true });
+
     await app.page.getByLabel('Twitch channel').fill('example');
     await app.page.getByRole('button', { name: 'Continue' }).click();
 
-    const notice = app.page
-      .getByRole('status')
-      .filter({ hasText: /example|not saved|not available|preview/i });
-    await expect(notice).toBeVisible();
-    await expect(notice).not.toContainText(/saved for this session/i);
-    await expect(notice).toContainText(/not saved|not available yet|preview/i);
+    await expect(app.page.getByTestId('setup-step')).toHaveAttribute('data-step', '2');
+    await expect(app.page.getByTestId('rom-file-input')).toBeVisible();
+    await expect(app.page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
+
+    const after = await app.request.get(`${app.baseURL}/api/settings`);
+    expect(after.status()).toBe(200);
+    expect(await after.json()).toEqual({ channel: null, romId: null, firstRun: true });
   });
 
   test('answers ping on /ws without disturbing Vite HMR upgrades', async ({ server }) => {
