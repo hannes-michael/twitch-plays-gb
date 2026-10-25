@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +37,11 @@ function createLogBuffer(): LogBuffer {
   return { lines: [], partial: '' };
 }
 
-function appendChunk(buffer: LogBuffer, chunk: Buffer | string, onLine: (line: string) => void): void {
+function appendChunk(
+  buffer: LogBuffer,
+  chunk: Buffer | string,
+  onLine: (line: string) => void,
+): void {
   buffer.partial += chunk.toString();
   const parts = buffer.partial.split(/\r?\n/);
   buffer.partial = parts.pop() ?? '';
@@ -68,20 +72,28 @@ function formatLogs(stdout: LogBuffer, stderr: LogBuffer): string {
   return sections.length > 0 ? sections.join('\n') : '(no server output captured)';
 }
 
-function waitForExit(child: ChildProcess): Promise<void> {
+function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+
   return new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      resolve();
-      return;
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      resolve(false);
+    }, timeoutMs);
+    function onExit(): void {
+      clearTimeout(timer);
+      resolve(true);
     }
-    child.once('exit', () => resolve());
+    child.once('exit', onExit);
   });
 }
 
 function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   if (child.pid === undefined) return;
   if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
     return;
   }
   try {
@@ -95,7 +107,11 @@ function killProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-async function waitForHealth(baseURL: string, child: ChildProcess, logs: () => string): Promise<void> {
+async function waitForHealth(
+  baseURL: string,
+  child: ChildProcess,
+  logs: () => string,
+): Promise<void> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   let lastError = 'no response yet';
 
@@ -113,7 +129,11 @@ async function waitForHealth(baseURL: string, child: ChildProcess, logs: () => s
         lastError = `HTTP ${response.status}`;
       } else {
         const body: unknown = await response.json();
-        if (typeof body === 'object' && body !== null && (body as { status?: unknown }).status === 'ok') {
+        if (
+          typeof body === 'object' &&
+          body !== null &&
+          (body as { status?: unknown }).status === 'ok'
+        ) {
           return;
         }
         lastError = `unexpected health payload: ${JSON.stringify(body)}`;
@@ -131,6 +151,25 @@ async function waitForHealth(baseURL: string, child: ChildProcess, logs: () => s
   );
 }
 
+function waitForUrl(urlPromise: Promise<string>, logs: () => string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Server did not print TPG_URL within ${STARTUP_TIMEOUT_MS}ms.\n${logs()}`));
+    }, STARTUP_TIMEOUT_MS);
+
+    urlPromise.then(
+      (url) => {
+        clearTimeout(timer);
+        resolve(url);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Starts the real server on a random port with a temporary data directory.
  *
@@ -146,30 +185,40 @@ async function waitForHealth(baseURL: string, child: ChildProcess, logs: () => s
  */
 export async function startServer(): Promise<TestServer> {
   const dataDir = await mkdtemp(join(tmpdir(), 'tpg-e2e-'));
-  const stdout = createLogBuffer();
-  const stderr = createLogBuffer();
-  const logs = (): string => formatLogs(stdout, stderr);
+  const stdoutLog = createLogBuffer();
+  const stderrLog = createLogBuffer();
+  const logs = (): string => formatLogs(stdoutLog, stderrLog);
 
-  const child = spawn(
-    process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    ['tsx', 'src/server/index.ts', '--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir],
-    {
-      cwd: repoRoot,
-      detached: process.platform !== 'win32',
-      env: {
-        ...process.env,
-        TPG_TEST: '1',
-        TPG_DEV: '0',
-        TPG_DATA_DIR: dataDir,
-        TPG_CONFIG: join(dataDir, 'config.json'),
-        TPG_LOG_LEVEL: process.env.TPG_LOG_LEVEL ?? 'debug',
-        FORCE_COLOR: '0',
+  let child: ChildProcess;
+  try {
+    child = spawn(
+      process.platform === 'win32' ? 'npx.cmd' : 'npx',
+      ['tsx', 'src/server/index.ts', '--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir],
+      {
+        cwd: repoRoot,
+        detached: process.platform !== 'win32',
+        env: {
+          ...process.env,
+          TPG_TEST: '1',
+          TPG_DEV: '0',
+          TPG_DATA_DIR: dataDir,
+          TPG_CONFIG: join(dataDir, 'config.json'),
+          TPG_LOG_LEVEL: process.env.TPG_LOG_LEVEL ?? 'debug',
+          FORCE_COLOR: '0',
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
+    );
+  } catch (error) {
+    await rm(dataDir, { recursive: true, force: true });
+    throw new Error(
+      `Failed to start server process: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
 
-  if (!child.stdout || !child.stderr) {
+  const { stdout, stderr } = child;
+  if (!stdout || !stderr) {
     killProcessTree(child, 'SIGKILL');
     await rm(dataDir, { recursive: true, force: true });
     throw new Error('Failed to capture server stdout/stderr.');
@@ -192,33 +241,30 @@ export async function startServer(): Promise<TestServer> {
     if (stopped) return;
     stopped = true;
     process.removeListener('exit', onParentExit);
-    flushBuffer(stdout);
-    flushBuffer(stderr);
+    flushBuffer(stdoutLog);
+    flushBuffer(stderrLog);
 
-    if (child.exitCode === null && child.signalCode === null) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
       killProcessTree(child, 'SIGTERM');
-      const exited = await Promise.race([
-        waitForExit(child).then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT_MS)),
-      ]);
-      if (!exited && child.exitCode === null && child.signalCode === null) {
+      const exited = await waitForExit(child, SHUTDOWN_TIMEOUT_MS);
+      if (!exited) {
         killProcessTree(child, 'SIGKILL');
-        await waitForExit(child);
+        await waitForExit(child, 1_000);
       }
     }
 
     await rm(dataDir, { recursive: true, force: true });
   };
 
-  child.stdout.on('data', (chunk: Buffer | string) => {
-    appendChunk(stdout, chunk, (line) => {
+  stdout.on('data', (chunk: Buffer | string) => {
+    appendChunk(stdoutLog, chunk, (line) => {
       const match = /^TPG_URL=(.+)$/.exec(line);
       if (match) resolveUrl?.(match[1]);
     });
   });
 
-  child.stderr.on('data', (chunk: Buffer | string) => {
-    appendChunk(stderr, chunk, () => {});
+  stderr.on('data', (chunk: Buffer | string) => {
+    appendChunk(stderrLog, chunk, () => {});
   });
 
   child.once('error', (error) => {
@@ -234,7 +280,7 @@ export async function startServer(): Promise<TestServer> {
   });
 
   try {
-    const baseURL = await urlPromise;
+    const baseURL = await waitForUrl(urlPromise, logs);
     await waitForHealth(baseURL, child, logs);
     return {
       baseURL,
@@ -256,9 +302,12 @@ export const test = base.extend<Fixtures>({
         await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to load the app at ${server.baseURL}: ${message}\n${server.getLogs()}`, {
-          cause: error,
-        });
+        throw new Error(
+          `Failed to load the app at ${server.baseURL}: ${message}\n${server.getLogs()}`,
+          {
+            cause: error,
+          },
+        );
       }
       await use({ baseURL: server.baseURL, page, request: page.request });
     } finally {

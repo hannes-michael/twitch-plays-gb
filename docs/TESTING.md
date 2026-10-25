@@ -40,10 +40,10 @@ npm run test:e2e -- --project=electron
 
 ## Projects
 
-| Project    | Directory                | Purpose                              |
-| ---------- | ------------------------ | ------------------------------------ |
-| `chromium` | `tests/e2e/web`          | Browser UI and OBS overlay scenarios |
-| `electron` | `tests/e2e/electron`     | Desktop shell and capture window     |
+| Project    | Directory            | Purpose                              |
+| ---------- | -------------------- | ------------------------------------ |
+| `chromium` | `tests/e2e/web`      | Browser UI and OBS overlay scenarios |
+| `electron` | `tests/e2e/electron` | Desktop shell and capture window     |
 
 ## Server fixture
 
@@ -52,11 +52,13 @@ directory. The server runs with `TPG_TEST=1` and `--port 0`, prints a
 machine-readable URL line, and the fixture waits for `/health` before returning.
 
 ```ts
-import { test } from '../fixtures/server';
+import { test, expect } from '../../fixtures/server';
 
 test('launches', async ({ app }) => {
-  await app.page.goto('/');
+  // app.page is already navigated to the server; app.baseURL points at it.
   await expect(app.page.getByRole('heading', { name: 'Twitch Plays GB' })).toBeVisible();
+  const response = await app.request.get(`${app.baseURL}/health`);
+  expect(response.status()).toBe(200);
 });
 ```
 

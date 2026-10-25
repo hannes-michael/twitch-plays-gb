@@ -18,7 +18,9 @@ test.describe('app launch', () => {
     await expect(app.page.getByRole('heading', { name: 'Twitch Plays GB' })).toBeVisible();
     await expect(app.page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
     await expect(app.page.getByText('Before you start')).toBeVisible();
-    await expect(app.page.getByText(/You must supply your own legally obtained ROMs/)).toBeVisible();
+    await expect(
+      app.page.getByText(/You must supply your own legally obtained ROMs/),
+    ).toBeVisible();
     await expect(app.page.getByLabel('Twitch channel')).toBeVisible();
     await expect(app.page.getByRole('button', { name: 'Continue' })).toBeVisible();
     await expect(app.page.getByTestId('server-status-label')).toHaveText('online');
