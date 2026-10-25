@@ -347,10 +347,51 @@ server URLs (`127.0.0.1`, `localhost`, or `[::1]`).
 - Test mode without an explicit data directory is a hard configuration error.
 - Never set `TPG_DATA_DIR` to a real save directory while developing.
 
-## Planned developer tools
+## Developer panel and test chat
 
-The fake chat panel/source (P0-15) and the full emulator/chat/frame debug panel
-(P0-11) are not implemented yet. The OBS overlay already exposes status, FPS,
-frame, audio, WebSocket, and audio-unlock counters for tests. When the full
-panel lands it will be documented here. OBS setup documentation is also planned
-in `docs/OBS.md`.
+When the server runs with `TPG_DEV=1` (including `npm run dev` and
+`npm run dev:web`) or `TPG_TEST=1`, the dashboard shows a **Developer** section
+below the setup card. It reads the mode from `/health`, mounts only in dev/test,
+and is driven by the developer-only `GET /api/debug` endpoint, which it polls
+every 1.5 seconds while visible. Production never requests `/api/debug`. It
+shows:
+
+- WS client count and emulator status/model;
+- video frames, audio chunks, FPS, and audio sample rate;
+- fake chat source/connection status and message count;
+- placeholder queue length/votes (0 until P1 input queues land);
+- resolved democracy window and hold/release frame timings.
+
+The **Test chat** form posts `{ user, text }` to `POST /api/test/chat`. External
+callers can use the same route (loopback only; no auth because it is a local
+developer endpoint):
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/api/test/chat \
+  -H 'content-type: application/json' \
+  -d '{"user":"dev","text":"!up"}'
+```
+
+Inputs are trimmed, limited to 32 user and 200 text characters, and reject
+control characters. Recent messages appear in the panel log as escaped React
+text. Each injected message is also broadcast on `/ws` as
+`{ "type": "chat", "message": ... }`, and new clients receive a `chat-status`
+message. Production mode starts no chat source and returns JSON 404 for
+`/api/debug` and `/api/test/chat`.
+
+### Chat timings
+
+These values are resolved through normal configuration (CLI, environment, JSON
+config, defaults) and exposed in the debug panel. P1 democracy/input logic will
+consume them; nothing uses them for feature behavior yet.
+
+| Setting          | CLI                          | Default | Valid range   |
+| ---------------- | ---------------------------- | ------- | ------------- |
+| Democracy window | `--democracy-window-ms <ms>` | 15000   | 1..3600000 ms |
+| Hold frames      | `--hold-frames <frames>`     | 8       | 1..600 frames |
+| Release frames   | `--release-frames <frames>`  | 4       | 1..600 frames |
+
+Environment equivalents: `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
+`TPG_RELEASE_FRAMES`. The hold/release defaults match node-mgba's input timing.
+
+OBS setup documentation remains a manual checklist in `docs/OBS.md`.

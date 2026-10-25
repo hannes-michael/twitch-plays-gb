@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import type { AppMode } from '@shared/debug';
 import type { EmulatorLifecycleStatus } from '@shared/emulator-status';
+import DeveloperPanel from './DeveloperPanel';
 
 type ServerStatus = 'checking' | 'online' | 'offline';
 
@@ -7,6 +9,7 @@ interface HealthResponse {
   status: 'ok';
   version: string;
   uptime: number;
+  mode: AppMode;
   emulator: EmulatorLifecycleStatus;
   clients: { total: number };
 }
@@ -17,6 +20,7 @@ const HEALTH_REQUEST_TIMEOUT_MS = 1_500;
 export default function App() {
   const [serverStatus, setServerStatus] = useState<ServerStatus>('checking');
   const [serverVersion, setServerVersion] = useState<string | null>(null);
+  const [appMode, setAppMode] = useState<AppMode | null>(null);
   const [channel, setChannel] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -43,6 +47,7 @@ export default function App() {
         }
         setServerStatus('online');
         setServerVersion(health.version);
+        setAppMode(health.mode);
       } catch {
         if (active) {
           setServerStatus('offline');
@@ -144,6 +149,8 @@ export default function App() {
           </p>
         </aside>
       </section>
+
+      {appMode === 'dev' || appMode === 'test' ? <DeveloperPanel /> : null}
     </main>
   );
 }

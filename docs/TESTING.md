@@ -189,12 +189,37 @@ Logs are written to `test-results/packaged-smoke/` (git-ignored). The separate
 `package-smoke.yml` workflow runs Linux under Xvfb and Windows natively, and
 uploads logs/artifacts on failure.
 
-## Fake chat (planned, P0-15)
+## Fake chat and developer panel (P0-10/P0-11/P0-15)
 
-Test-only injection is not implemented yet. When it lands, it will be available
-through a UI test panel and a test-only HTTP endpoint, both disabled unless
-`TPG_TEST=1`. Use them to drive anarchy and democracy scenarios deterministically;
-do not mock the emulator.
+Servers started with `TPG_DEV=1` or `TPG_TEST=1` start a fake chat source and
+expose two developer-only routes:
+
+- `GET /api/debug` returns mode, resolved timings, emulator/media counters,
+  chat status plus recent messages, WS client count, and placeholder queue
+  values.
+- `POST /api/test/chat` accepts `{ "user": "...", "text": "..." }` (user ≤ 32
+  characters, text ≤ 200, trimmed, control characters rejected), injects the
+  message into the fake source, and returns `201 { ok: true, message }`. Invalid
+  payloads return 400.
+
+The dashboard mounts the **Developer** panel only when `/health` reports dev/test
+mode, then renders it once `/api/debug` answers 200. Production never requests
+the debug endpoint. The test-chat form calls the same `POST /api/test/chat` path
+as external callers;
+it does not use a UI-only bypass. Injected messages are also broadcast as
+`{ "type": "chat", "message": ... }` on `/ws`. Text is rendered as React text
+nodes, never HTML.
+
+Production mode does not start chat and returns JSON 404 for both routes. Use
+fake chat to drive anarchy/democracy scenarios deterministically later; do not
+mock the emulator.
+
+`dev-panels.spec.ts` covers the panel metrics, fake source status, API and form
+injection, XSS escaping, WS broadcast, and malformed payload. It also checks the
+real WS client count. `server-cli.spec.ts` starts a server with
+`TPG_DEMOCRACY_WINDOW_MS=750`, `TPG_HOLD_FRAMES=2`, and
+`TPG_RELEASE_FRAMES=1` and asserts they appear in `/api/debug`, so short test
+timings use normal config rather than test-only branches.
 
 ## Failure artifacts
 

@@ -7,12 +7,13 @@ window.
 
 > Status: walking skeleton. The config-driven server, first-run UI, Electron
 > shell (including a spawned server child and OBS capture window), one-command
-> dev workflow, local GB/GBC/GBA video/audio overlay, OBS setup guide, and
-> Linux AppImage/.deb builds are runnable. Linux packaged builds pass a headless
-> smoke test; Windows packaging is wired for CI but has not been executed in the
-> development environment. Twitch chat is planned, and OBS capture is still a
-> manual checklist. See `PLAN.md` for the local implementation roadmap (not
-> committed) and `docs/TESTING.md` for the E2E-first workflow.
+> dev workflow, local GB/GBC/GBA video/audio overlay, developer-only fake
+> chat/debug panel, OBS setup guide, and Linux AppImage/.deb builds are runnable.
+> Linux packaged builds pass a headless smoke test; Windows packaging is wired
+> for CI but has not been executed in the development environment. Twitch chat
+> and input queues are planned, and OBS capture is still a manual checklist. See
+> `PLAN.md` for the local implementation roadmap (not committed) and
+> `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
@@ -118,8 +119,9 @@ for now. See `.env.example`.
 - `docs/OBS.md` — Browser Source and capture window setup, audio checklist (manual, pending)
 - `docs/DECISIONS.md` — architecture decisions and spike outcomes
 
-OBS manual verification is still pending, and the fake chat/debug panels are
-planned but not written yet.
+OBS manual verification is still pending. Twitch chat is not connected yet;
+development/test servers expose a fake chat source through the dashboard's
+Developer panel and `POST /api/test/chat` (see `docs/DEVELOPMENT.md`).
 
 ## Legal
 
