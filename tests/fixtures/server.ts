@@ -175,6 +175,27 @@ function waitForUrl(urlPromise: Promise<string>, logs: () => string): Promise<st
   });
 }
 
+function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  // Developer environment must not leak into the fixture. In particular, a
+  // TPG_CONFIG pointing at a missing file would now be a hard config error.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('TPG_') || key === 'HOST' || key === 'PORT') {
+      delete env[key];
+    }
+  }
+
+  return {
+    ...env,
+    TPG_TEST: production ? '0' : '1',
+    TPG_DEV: '0',
+    TPG_DATA_DIR: dataDir,
+    TPG_LOG_LEVEL: 'debug',
+    FORCE_COLOR: '0',
+  };
+}
+
 /**
  * Starts the real server on a random port with a temporary data directory.
  *
@@ -205,14 +226,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     child = spawn(process.execPath, commandArgs, {
       cwd: repoRoot,
       detached: process.platform !== 'win32',
-      env: {
-        ...process.env,
-        TPG_TEST: production ? '0' : '1',
-        TPG_DEV: '0',
-        TPG_DATA_DIR: dataDir,
-        TPG_LOG_LEVEL: process.env.TPG_LOG_LEVEL ?? 'debug',
-        FORCE_COLOR: '0',
-      },
+      env: createServerEnv(dataDir, production),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -231,6 +245,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   }
 
   let stopped = false;
+  let startupCompleted = false;
+  let stopRequested = false;
+  let unexpectedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let resolveUrl: ((url: string) => void) | undefined;
   let rejectUrl: ((error: Error) => void) | undefined;
   const urlPromise = new Promise<string>((resolve, reject) => {
@@ -246,6 +263,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   const stop = async (): Promise<void> => {
     if (stopped) return;
     stopped = true;
+    const exitedBeforeStop =
+      child.exitCode !== null || child.signalCode !== null
+        ? { code: child.exitCode, signal: child.signalCode }
+        : undefined;
+    stopRequested = true;
     process.removeListener('exit', onParentExit);
     flushBuffer(stdoutLog);
     flushBuffer(stderrLog);
@@ -260,6 +282,14 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     }
 
     await rm(dataDir, { recursive: true, force: true });
+
+    if (startupCompleted) {
+      const exit = unexpectedExit ?? exitedBeforeStop;
+      if (exit !== undefined && (exit.code !== 0 || exit.signal !== null)) {
+        const detail = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? 'unknown'}`;
+        throw new Error(`Server exited unexpectedly with ${detail} during the test.\n${logs()}`);
+      }
+    }
   };
 
   stdout.on('data', (chunk: Buffer | string) => {
@@ -278,6 +308,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   });
 
   child.once('exit', (code, signal) => {
+    if (startupCompleted && !stopRequested) {
+      unexpectedExit = { code, signal };
+    }
     rejectUrl?.(
       new Error(
         `Server exited with ${signal ? `signal ${signal}` : `code ${code}`} before printing TPG_URL.\n${logs()}`,
@@ -288,6 +321,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   try {
     const baseURL = await waitForUrl(urlPromise, logs);
     await waitForHealth(baseURL, child, logs);
+    startupCompleted = true;
     return {
       baseURL,
       dataDir,
@@ -301,24 +335,61 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 }
 
 export const test = base.extend<Fixtures>({
-  app: async ({ page }, use) => {
+  app: async ({ page }, use, testInfo) => {
     const server = await startServer();
+    let failure: unknown;
+
     try {
+      let response;
       try {
-        await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
+        response = await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
           `Failed to load the app at ${server.baseURL}: ${message}\n${server.getLogs()}`,
-          {
-            cause: error,
-          },
+          { cause: error },
         );
       }
+
+      if (!response || !response.ok()) {
+        throw new Error(
+          `App returned HTTP ${response?.status() ?? 'no response'} at ${server.baseURL}.\n${server.getLogs()}`,
+        );
+      }
+
       await use({ baseURL: server.baseURL, page, request: page.request });
-    } finally {
-      await server.stop();
+    } catch (error) {
+      failure = error;
     }
+
+    let stopError: unknown;
+    try {
+      await server.stop();
+    } catch (error) {
+      stopError = error;
+    }
+
+    if (
+      failure !== undefined ||
+      stopError !== undefined ||
+      testInfo.status !== testInfo.expectedStatus
+    ) {
+      await testInfo.attach('server-logs', {
+        body: server.getLogs(),
+        contentType: 'text/plain',
+      });
+    }
+
+    if (stopError !== undefined) {
+      await testInfo.attach('fixture-teardown-error', {
+        body:
+          stopError instanceof Error ? (stopError.stack ?? stopError.message) : String(stopError),
+        contentType: 'text/plain',
+      });
+    }
+
+    if (failure !== undefined) throw failure;
+    if (stopError !== undefined) throw stopError;
   },
 });
 

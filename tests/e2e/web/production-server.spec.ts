@@ -17,7 +17,9 @@ test.describe('production server', () => {
     }
   });
 
-  test('serves the SPA and health while rejecting unknown API and asset paths', async (_fixtures, testInfo) => {
+  test('serves the SPA and health while rejecting unknown API and asset paths', async ({
+    browserName: _browserName,
+  }, testInfo) => {
     const server = await startServer({ mode: 'production' });
     let failure: unknown;
     let stopError: unknown;

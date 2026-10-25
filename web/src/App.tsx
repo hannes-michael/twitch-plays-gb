@@ -71,7 +71,7 @@ export default function App() {
       return;
     }
     setNotice(
-      `Channel "${trimmedChannel}" saved for this session. Twitch connection arrives in a later build.`,
+      'Twitch connection is not available yet. Nothing was saved; this setup step is a preview for a later build.',
     );
   };
 
@@ -122,7 +122,8 @@ export default function App() {
             />
           </div>
           <p className="field-hint">
-            Use the channel name without the leading #. You can change this later.
+            Use the channel name without the leading #. This form is a preview and does not connect
+            or save yet.
           </p>
           <button type="submit" className="primary-action">
             Continue

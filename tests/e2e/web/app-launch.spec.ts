@@ -37,6 +37,14 @@ test.describe('app launch', () => {
     expect(await response.json()).toEqual({ error: 'Not found' });
   });
 
+  test('returns 404 for missing built asset paths in embedded Vite mode', async ({ app }) => {
+    const response = await app.request.get(`${app.baseURL}/assets/missing.js`, {
+      headers: { accept: '*/*' },
+    });
+
+    expect(response.status()).toBe(404);
+  });
+
   test('makes clear that the channel setup action is not persisted yet', async ({ app }) => {
     await app.page.getByLabel('Twitch channel').fill('example');
     await app.page.getByRole('button', { name: 'Continue' }).click();

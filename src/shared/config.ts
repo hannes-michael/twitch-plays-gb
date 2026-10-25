@@ -86,6 +86,29 @@ export class ConfigError extends Error {
   }
 }
 
+export const CLI_USAGE = `Usage: twitch-plays-gb [options]
+
+Options:
+  --host <host>          Bind address (default: 127.0.0.1)
+  --port <port>          Listen port; use 0 for a random port (default: 3000)
+  --data-dir <path>      Data directory (default: platform-specific)
+  --config <path>        JSON config file (default: <dataDir>/config.json)
+  --channel <name>       Twitch channel name
+  --log-level <level>    debug | info | warn | error (default: info)
+  --dev[=<bool>]         Enable development mode and Vite middleware
+  --test[=<bool>]        Enable test mode and Vite middleware
+  -h, --help             Show this help
+
+Environment: HOST, PORT, TPG_HOST, TPG_PORT, TPG_DATA_DIR, TPG_CONFIG,
+TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL`;
+
+export class HelpRequested extends Error {
+  constructor() {
+    super(CLI_USAGE);
+    this.name = 'HelpRequested';
+  }
+}
+
 export interface LoadConfigOptions {
   argv?: string[];
   env?: NodeJS.ProcessEnv;
@@ -103,14 +126,27 @@ interface CliValues {
 }
 
 const BOOLEAN_FLAGS = new Set(['dev', 'test']);
+const VALUE_FLAGS = new Set(['host', 'port', 'data-dir', 'channel', 'log-level', 'config']);
 
 function parseCliArgs(argv: string[]): CliValues {
   const values: CliValues = {};
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (!arg.startsWith('--') || arg === '--') {
-      throw new ConfigError(`Unexpected command-line argument: ${arg}`);
+
+    if (arg === '--help' || arg === '-h') {
+      throw new HelpRequested();
+    }
+
+    if (!arg.startsWith('--')) {
+      if (arg.startsWith('-')) {
+        throw new ConfigError(`Unknown option: ${arg}. Use --help for usage.`);
+      }
+      throw new ConfigError(`Unexpected command-line argument: ${arg}. Use --help for usage.`);
+    }
+
+    if (arg === '--') {
+      throw new ConfigError('Unexpected command-line argument: --. Use --help for usage.');
     }
 
     const withoutPrefix = arg.slice(2);
@@ -120,21 +156,30 @@ function parseCliArgs(argv: string[]): CliValues {
 
     if (BOOLEAN_FLAGS.has(name)) {
       const value = inlineValue ?? 'true';
+      if (value === '') {
+        throw new ConfigError(
+          `Missing value for --${name}. Use --${name}=true or --${name}=false.`,
+        );
+      }
       if (name === 'dev') values.dev = value;
       else values.test = value;
       continue;
     }
 
+    if (!VALUE_FLAGS.has(name)) {
+      throw new ConfigError(`Unknown option: --${name}. Use --help for usage.`);
+    }
+
     if (
       inlineValue === undefined &&
-      (argv[index + 1] === undefined || argv[index + 1].startsWith('--'))
+      (argv[index + 1] === undefined || argv[index + 1].startsWith('-'))
     ) {
-      throw new ConfigError(`Missing value for --${name}`);
+      throw new ConfigError(`Missing value for --${name}. Use --help for usage.`);
     }
 
     const value = inlineValue ?? argv[++index];
-    if (value === '') {
-      throw new ConfigError(`Missing value for --${name}`);
+    if (value === undefined || value === '') {
+      throw new ConfigError(`Missing value for --${name}. Use --help for usage.`);
     }
 
     switch (name) {
@@ -156,8 +201,6 @@ function parseCliArgs(argv: string[]): CliValues {
       case 'config':
         values.config = value;
         break;
-      default:
-        throw new ConfigError(`Unknown option: --${name}`);
     }
   }
 
@@ -192,13 +235,16 @@ export function defaultDataDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'twitch-plays-gb');
 }
 
-function readConfigFile(path: string): Record<string, unknown> {
+function readConfigFile(path: string, required: boolean): Record<string, unknown> {
   let raw: string;
 
   try {
     raw = readFileSync(path, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (required) {
+        throw new ConfigError(`Config file not found: ${path}`);
+      }
       return {};
     }
     throw new ConfigError(`Could not read config file ${path}: ${(error as Error).message}`);
@@ -238,9 +284,9 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const cli = parseCliArgs(argv);
   const envValues = readEnv(env);
   const baseDataDir = cli.dataDir ?? envValues.dataDir ?? defaultDataDir(env);
-  const configuredPath = cli.config ?? (env.TPG_CONFIG || undefined);
+  const configuredPath = (cli.config ?? env.TPG_CONFIG)?.trim() || undefined;
   const configPath = resolve(configuredPath ?? join(baseDataDir, 'config.json'));
-  const fileValues = readConfigFile(configPath);
+  const fileValues = readConfigFile(configPath, configuredPath !== undefined);
 
   const { config: _configPath, ...cliValues } = cli;
   const merged = {

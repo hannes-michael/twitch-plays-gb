@@ -65,11 +65,12 @@ test('launches', async ({ app }) => {
 The fixture kills the server process on teardown and deletes its temp directory.
 Never point tests at your real data directory.
 
-## Fake chat
+## Fake chat (planned, P0-15)
 
-Test-only injection is available through the UI test panel and a test-only HTTP
-endpoint. Both are disabled unless `TPG_TEST=1`. Use them to drive anarchy and
-democracy scenarios deterministically; do not mock the emulator.
+Test-only injection is not implemented yet. When it lands, it will be available
+through a UI test panel and a test-only HTTP endpoint, both disabled unless
+`TPG_TEST=1`. Use them to drive anarchy and democracy scenarios deterministically;
+do not mock the emulator.
 
 ## Failure artifacts
 

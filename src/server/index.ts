@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { loadConfig } from '../shared/config';
+import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
 import { createLogger } from './logger';
 import { createServerState } from './state';
@@ -14,6 +14,10 @@ async function main(): Promise<void> {
   try {
     config = loadConfig();
   } catch (error) {
+    if (error instanceof HelpRequested) {
+      process.stdout.write(`${error.message}\n`);
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`Configuration error: ${message}\n`);
     process.exitCode = 1;

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import type { AppConfig } from '../shared/config';
@@ -29,6 +29,7 @@ export async function createApp(
   const startedAt = Date.now();
 
   app.get('/health', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
     response.json({
       status: 'ok',
       version,
@@ -38,16 +39,42 @@ export async function createApp(
     });
   });
 
+  // Unknown API routes are JSON 404s in every mode. Registering this before
+  // Vite/static also stops the embedded Vite middleware from proxying /api to
+  // the standalone dev-web server on port 3000.
+  app.use('/api', (_request, response) => {
+    response.status(404).json({ error: 'Not found' });
+  });
+
   if (config.dev || config.test) {
     logger.info('mounting Vite middleware (development/test mode)');
+
+    // Built asset paths are reserved for production. In embedded mode they do
+    // not exist unless a public asset is present, and Vite would otherwise
+    // serve its SPA fallback for a missing asset request.
+    app.use((request, response, next) => {
+      if (request.path !== '/assets' && !request.path.startsWith('/assets/')) {
+        next();
+        return;
+      }
+      if (existsSync(join(webRoot, 'public', request.path))) {
+        next();
+        return;
+      }
+      response.status(404).json({ error: 'Not found' });
+    });
+
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       configFile: viteConfigPath,
       root: webRoot,
+      mode: 'embedded',
       appType: 'spa',
       server: {
         middlewareMode: true,
-        hmr: config.dev ? { host: config.host } : false,
+        // Vite's HMR WebSocket uses its own port for now; attaching it to the
+        // main HTTP server is a P0-07 follow-up.
+        ws: config.dev ? { host: config.host } : false,
       },
     });
     app.use(vite.middlewares);
@@ -67,9 +94,11 @@ export async function createApp(
     );
   }
 
-  app.use(express.static(distWebRoot));
+  app.use(express.static(distWebRoot, { index: false }));
   app.use((request, response, next) => {
-    if (request.method !== 'GET' || !request.accepts('html')) {
+    const accept = request.get('accept') ?? '';
+    const isNavigation = request.method === 'GET' && accept.includes('text/html');
+    if (!isNavigation || extname(request.path) !== '') {
       next();
       return;
     }
