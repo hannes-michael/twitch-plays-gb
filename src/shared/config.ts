@@ -172,7 +172,7 @@ function parseCliArgs(argv: string[]): CliValues {
 
     if (
       inlineValue === undefined &&
-      (argv[index + 1] === undefined || argv[index + 1].startsWith('-'))
+      (argv[index + 1] === undefined || argv[index + 1].startsWith('--'))
     ) {
       throw new ConfigError(`Missing value for --${name}. Use --help for usage.`);
     }

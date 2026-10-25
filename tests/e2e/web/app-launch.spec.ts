@@ -35,6 +35,12 @@ test.describe('app launch', () => {
     expect(response.status()).toBe(404);
     expect(response.headers()['content-type']).toContain('application/json');
     expect(await response.json()).toEqual({ error: 'Not found' });
+
+    const encoded = await app.request.get(`${app.baseURL}/api%2Fnope`, {
+      headers: { accept: 'text/html' },
+    });
+    expect(encoded.status()).toBe(404);
+    expect(encoded.headers()['content-type']).toContain('application/json');
   });
 
   test('returns 404 for missing built asset paths in embedded Vite mode', async ({ app }) => {
@@ -43,6 +49,16 @@ test.describe('app launch', () => {
     });
 
     expect(response.status()).toBe(404);
+
+    const htmlResponse = await app.request.get(`${app.baseURL}/assets/missing`, {
+      headers: { accept: 'text/html' },
+    });
+    expect(htmlResponse.status()).toBe(404);
+
+    const encoded = await app.request.get(`${app.baseURL}/assets%2Fmissing.js`, {
+      headers: { accept: 'text/html' },
+    });
+    expect(encoded.status()).toBe(404);
   });
 
   test('makes clear that the channel setup action is not persisted yet', async ({ app }) => {

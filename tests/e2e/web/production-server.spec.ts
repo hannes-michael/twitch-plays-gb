@@ -1,6 +1,4 @@
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { startServer } from '../../fixtures/server';
@@ -9,12 +7,9 @@ const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 test.describe('production server', () => {
   test.beforeAll(() => {
-    if (!existsSync(join(repoRoot, 'dist', 'web', 'index.html'))) {
-      execSync('npm run build:web', { cwd: repoRoot, stdio: 'pipe' });
-    }
-    if (!existsSync(join(repoRoot, 'dist', 'server', 'index.js'))) {
-      execSync('npm run build:server', { cwd: repoRoot, stdio: 'pipe' });
-    }
+    // Always build so this suite can never silently test stale artifacts.
+    execSync('npm run build:web', { cwd: repoRoot, stdio: 'inherit' });
+    execSync('npm run build:server', { cwd: repoRoot, stdio: 'inherit' });
   });
 
   test('serves the SPA and health while rejecting unknown API and asset paths', async ({
@@ -57,6 +52,51 @@ test.describe('production server', () => {
       expect(missingAsset.status).toBe(404);
 
       expect(health.headers.get('cache-control')).toBe('no-store');
+    } catch (error) {
+      failure = error;
+    } finally {
+      try {
+        await server.stop();
+      } catch (error) {
+        stopError = error;
+      }
+    }
+
+    if (failure !== undefined || stopError !== undefined) {
+      await testInfo.attach('server-logs', {
+        body: server.getLogs(),
+        contentType: 'text/plain',
+      });
+    }
+    if (failure !== undefined) throw failure;
+    if (stopError !== undefined) throw stopError;
+  });
+
+  test('serves root for default/HEAD requests and guards assets and encoded API paths', async ({
+    browserName: _browserName,
+  }, testInfo) => {
+    const server = await startServer({ mode: 'production' });
+    let failure: unknown;
+    let stopError: unknown;
+
+    try {
+      const defaultRoot = await fetch(`${server.baseURL}/`);
+      expect(defaultRoot.status).toBe(200);
+      expect(await defaultRoot.text()).toContain('<div id="root"></div>');
+
+      const headRoot = await fetch(`${server.baseURL}/`, { method: 'HEAD' });
+      expect(headRoot.status).toBe(200);
+
+      const missingAsset = await fetch(`${server.baseURL}/assets/missing`, {
+        headers: { accept: 'text/html' },
+      });
+      expect(missingAsset.status).toBe(404);
+
+      const encodedApi = await fetch(`${server.baseURL}/api%2Fnope`, {
+        headers: { accept: 'text/html' },
+      });
+      expect(encodedApi.status).toBe(404);
+      expect(encodedApi.headers.get('content-type')).toContain('application/json');
     } catch (error) {
       failure = error;
     } finally {

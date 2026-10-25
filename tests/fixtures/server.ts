@@ -14,6 +14,7 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 export interface TestServer {
   baseURL: string;
   dataDir: string;
+  pid: number | undefined;
   getLogs(): string;
   stop(): Promise<void>;
 }
@@ -21,6 +22,8 @@ export interface TestServer {
 export interface StartServerOptions {
   /** Production mode runs the built dist/server entrypoint and static dist/web assets. */
   mode?: 'test' | 'production';
+  /** Test-only override for the SIGTERM-to-SIGKILL escalation delay. */
+  shutdownTimeoutMs?: number;
 }
 
 export interface AppFixture {
@@ -211,6 +214,7 @@ function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEn
  */
 export async function startServer(options: StartServerOptions = {}): Promise<TestServer> {
   const production = options.mode === 'production';
+  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
   const dataDir = await mkdtemp(join(tmpdir(), 'tpg-e2e-'));
   const stdoutLog = createLogBuffer();
   const stderrLog = createLogBuffer();
@@ -247,6 +251,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   let stopped = false;
   let startupCompleted = false;
   let stopRequested = false;
+  let forcedShutdown = false;
   let unexpectedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let resolveUrl: ((url: string) => void) | undefined;
   let rejectUrl: ((error: Error) => void) | undefined;
@@ -274,8 +279,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 
     if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
       killProcessTree(child, 'SIGTERM');
-      const exited = await waitForExit(child, SHUTDOWN_TIMEOUT_MS);
+      const exited = await waitForExit(child, shutdownTimeoutMs);
       if (!exited) {
+        forcedShutdown = true;
         killProcessTree(child, 'SIGKILL');
         await waitForExit(child, 1_000);
       }
@@ -283,9 +289,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 
     await rm(dataDir, { recursive: true, force: true });
 
+    if (forcedShutdown) {
+      throw new Error(
+        `Server required SIGKILL after ${shutdownTimeoutMs}ms without exiting from SIGTERM.\n${logs()}`,
+      );
+    }
+
     if (startupCompleted) {
       const exit = unexpectedExit ?? exitedBeforeStop;
-      if (exit !== undefined && (exit.code !== 0 || exit.signal !== null)) {
+      if (exit !== undefined) {
         const detail = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? 'unknown'}`;
         throw new Error(`Server exited unexpectedly with ${detail} during the test.\n${logs()}`);
       }
@@ -325,6 +337,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     return {
       baseURL,
       dataDir,
+      pid: child.pid,
       getLogs: logs,
       stop,
     };

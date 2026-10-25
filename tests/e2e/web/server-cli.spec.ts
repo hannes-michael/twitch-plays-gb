@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,15 @@ test.describe('server CLI', () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Unknown option: --bogus');
+    expect(result.stderr).not.toContain('Missing value');
+  });
+
+  test('reports negative port range errors instead of missing values', () => {
+    const result = runCli(['--port', '-1']);
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('expected an integer between 0 and 65535');
+    expect(result.stderr).toContain('"-1"');
     expect(result.stderr).not.toContain('Missing value');
   });
 
@@ -98,5 +107,57 @@ test.describe('server fixture', () => {
       if (previousConfig === undefined) delete process.env.TPG_CONFIG;
       else process.env.TPG_CONFIG = previousConfig;
     }
+  });
+
+  test('fails teardown when the server exits unexpectedly with code 0', async () => {
+    const server = await startServer();
+    const pid = server.pid;
+    if (pid === undefined) throw new Error('Server pid was not exposed.');
+
+    process.kill(pid, 'SIGTERM');
+    await expect
+      .poll(() => {
+        try {
+          process.kill(pid, 0);
+          return 'running';
+        } catch {
+          return 'exited';
+        }
+      })
+      .toBe('exited');
+
+    const error = await server.stop().then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('Server exited unexpectedly');
+    if (process.platform !== 'win32') {
+      expect((error as Error).message).toContain('code 0');
+    }
+  });
+
+  test('fails teardown when SIGKILL escalation is required', async () => {
+    test.skip(process.platform !== 'linux', 'procfs stopped-state check is Linux-only');
+
+    const server = await startServer({ shutdownTimeoutMs: 100 });
+    const pid = server.pid;
+    if (pid === undefined) throw new Error('Server pid was not exposed.');
+
+    process.kill(pid, 'SIGSTOP');
+    await expect
+      .poll(() => {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const end = stat.lastIndexOf(')');
+        return stat.slice(end + 2).split(' ')[0];
+      })
+      .toBe('T');
+
+    const error = await server.stop().then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('SIGKILL');
   });
 });

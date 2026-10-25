@@ -17,6 +17,18 @@ export interface AppContext {
   close(): Promise<void>;
 }
 
+function safeDecodePath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+function isPathWithin(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
 export async function createApp(
   config: AppConfig,
   state: ServerState,
@@ -39,11 +51,23 @@ export async function createApp(
     });
   });
 
-  // Unknown API routes are JSON 404s in every mode. Registering this before
-  // Vite/static also stops the embedded Vite middleware from proxying /api to
-  // the standalone dev-web server on port 3000.
-  app.use('/api', (_request, response) => {
+  // Future API routes belong on this router, before the 404 fallback, so they
+  // cannot be shadowed by it. The router is mounted before Vite/static so the
+  // embedded Vite middleware never proxies API traffic.
+  const apiRouter = express.Router();
+  apiRouter.use((_request, response) => {
     response.status(404).json({ error: 'Not found' });
+  });
+  app.use('/api', apiRouter);
+
+  // Express router mounts do not match encoded slashes (e.g. /api%2Fnope), so
+  // normalize for the API guard as well.
+  app.use((request, response, next) => {
+    if (isPathWithin(safeDecodePath(request.path), '/api')) {
+      response.status(404).json({ error: 'Not found' });
+      return;
+    }
+    next();
   });
 
   if (config.dev || config.test) {
@@ -53,11 +77,12 @@ export async function createApp(
     // not exist unless a public asset is present, and Vite would otherwise
     // serve its SPA fallback for a missing asset request.
     app.use((request, response, next) => {
-      if (request.path !== '/assets' && !request.path.startsWith('/assets/')) {
+      const decodedPath = safeDecodePath(request.path);
+      if (!isPathWithin(decodedPath, '/assets')) {
         next();
         return;
       }
-      if (existsSync(join(webRoot, 'public', request.path))) {
+      if (existsSync(join(webRoot, 'public', decodedPath))) {
         next();
         return;
       }
@@ -95,9 +120,22 @@ export async function createApp(
   }
 
   app.use(express.static(distWebRoot, { index: false }));
+
+  // Static lets real assets through; anything left under /assets is missing,
+  // including encoded variants such as /assets%2Fmissing.
+  app.use((request, response, next) => {
+    if (isPathWithin(safeDecodePath(request.path), '/assets')) {
+      response.status(404).json({ error: 'Not found' });
+      return;
+    }
+    next();
+  });
+
   app.use((request, response, next) => {
     const accept = request.get('accept') ?? '';
-    const isNavigation = request.method === 'GET' && accept.includes('text/html');
+    const methodAllowsBody = request.method === 'GET' || request.method === 'HEAD';
+    const isRoot = request.path === '/';
+    const isNavigation = methodAllowsBody && (isRoot || accept.includes('text/html'));
     if (!isNavigation || extname(request.path) !== '') {
       next();
       return;

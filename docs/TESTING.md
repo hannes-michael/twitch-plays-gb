@@ -65,6 +65,11 @@ test('launches', async ({ app }) => {
 The fixture kills the server process on teardown and deletes its temp directory.
 Never point tests at your real data directory.
 
+Production-mode checks use `startServer({ mode: 'production' })`, which runs the
+built `dist/server/index.js` with `TPG_TEST=0` against `dist/web`. The production
+spec builds both artifacts in `beforeAll` on every run, so stale output is never
+tested by accident.
+
 ## Fake chat (planned, P0-15)
 
 Test-only injection is not implemented yet. When it lands, it will be available
@@ -80,7 +85,8 @@ On failure Playwright retains a trace, video, and screenshot. Open a trace with:
 npx playwright show-trace test-results/<test>/trace.zip
 ```
 
-## OBS
+## OBS (planned)
 
-OBS itself is not automated. Keep the manual checklist in `docs/OBS.md` up to
-date and run it on Linux and Windows before a release.
+OBS itself is not automated. The `docs/OBS.md` manual checklist is planned but
+does not exist yet. Once written, keep it up to date and run it on Linux and
+Windows before a release.
