@@ -55,6 +55,8 @@ type Fixtures = {
   app: AppFixture;
   /** Playwright option: boot this ROM through the normal `--rom` config path. */
   emulatorRom: string;
+  /** Playwright option: extra environment for the real server process. */
+  serverEnv: NodeJS.ProcessEnv;
 };
 
 interface LogBuffer {
@@ -418,9 +420,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 
 export const test = base.extend<Fixtures>({
   emulatorRom: ['', { option: true }],
+  serverEnv: [{}, { option: true }],
 
-  server: async ({ playwright, emulatorRom }, use, testInfo) => {
-    const server = await startServer({ rom: emulatorRom || undefined });
+  server: async ({ playwright, emulatorRom, serverEnv }, use, testInfo) => {
+    const server = await startServer({ rom: emulatorRom || undefined, env: serverEnv });
     const request = await playwright.request.newContext({ baseURL: server.baseURL });
     let failure: unknown;
 
