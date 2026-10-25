@@ -41,6 +41,7 @@ async function main(): Promise<void> {
     `configuration: host=${config.host} port=${config.port} dataDir=${config.dataDir} ` +
       `dev=${config.dev} test=${config.test} logLevel=${config.logLevel}`,
   );
+  logger.info(`data directory: ${config.dataDir}`);
 
   const state = createServerState();
   let appContext;

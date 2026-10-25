@@ -91,7 +91,7 @@ export const CLI_USAGE = `Usage: twitch-plays-gb [options]
 Options:
   --host <host>          Bind address (default: 127.0.0.1)
   --port <port>          Listen port; use 0 for a random port (default: 3000)
-  --data-dir <path>      Data directory (default: platform-specific)
+  --data-dir <path>      Data directory (default: data/dev in dev, platform-specific otherwise)
   --config <path>        JSON config file (default: <dataDir>/config.json)
   --channel <name>       Twitch channel name
   --log-level <level>    debug | info | warn | error (default: info)
@@ -235,6 +235,20 @@ export function defaultDataDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'twitch-plays-gb');
 }
 
+/** Development state stays inside the repository and is git-ignored. */
+export function developmentDataDir(cwd: string = process.cwd()): string {
+  return resolve(cwd, 'data', 'dev');
+}
+
+const TEST_DATA_DIR_ERROR =
+  'Test mode requires an explicit data directory. Pass --data-dir <temp-dir> or set ' +
+  'TPG_DATA_DIR; refusing to use the default user data directory.';
+
+function flagEnabled(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
 function readConfigFile(path: string, required: boolean): Record<string, unknown> {
   let raw: string;
 
@@ -283,7 +297,18 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
 
   const cli = parseCliArgs(argv);
   const envValues = readEnv(env);
-  const baseDataDir = cli.dataDir ?? envValues.dataDir ?? defaultDataDir(env);
+  const explicitDataDir = cli.dataDir ?? envValues.dataDir;
+  const preliminaryTest = flagEnabled(cli.test ?? envValues.test);
+
+  // Refuse to read from or write to a real user data directory in test mode.
+  // The config file cannot make this safe, so only CLI/env overrides count.
+  if (preliminaryTest && explicitDataDir === undefined) {
+    throw new ConfigError(TEST_DATA_DIR_ERROR);
+  }
+
+  const preliminaryDev = !preliminaryTest && flagEnabled(cli.dev ?? envValues.dev);
+  const baseDataDir =
+    explicitDataDir ?? (preliminaryDev ? developmentDataDir() : defaultDataDir(env));
   const configuredPath = (cli.config ?? env.TPG_CONFIG)?.trim() || undefined;
   const configPath = resolve(configuredPath ?? join(baseDataDir, 'config.json'));
   const fileValues = readConfigFile(configPath, configuredPath !== undefined);
@@ -303,5 +328,20 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
     );
   }
 
-  return result.data;
+  // The flag may also come from the JSON config, in which case the path was
+  // resolved before reading it. Enforce the safety rule either way.
+  if (result.data.test && explicitDataDir === undefined) {
+    throw new ConfigError(TEST_DATA_DIR_ERROR);
+  }
+
+  const usesDevDefault =
+    result.data.dev &&
+    !result.data.test &&
+    explicitDataDir === undefined &&
+    fileValues.dataDir === undefined;
+
+  return {
+    ...result.data,
+    dataDir: usesDevDefault ? developmentDataDir() : result.data.dataDir,
+  };
 }

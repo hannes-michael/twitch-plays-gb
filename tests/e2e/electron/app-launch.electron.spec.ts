@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { expect, test } from '../../fixtures/server';
@@ -34,7 +35,11 @@ test.describe('electron app launch', () => {
 
     try {
       app = await electron.launch({
-        args: [...(process.env.CI ? ['--no-sandbox'] : []), repoRoot],
+        args: [
+          ...(process.env.CI ? ['--no-sandbox'] : []),
+          `--user-data-dir=${join(server.dataDir, 'electron-profile')}`,
+          repoRoot,
+        ],
         env: {
           ...process.env,
           TPG_SERVER_URL: server.baseURL,
@@ -60,6 +65,9 @@ test.describe('electron app launch', () => {
 
       await expect(page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
       await expect(page.getByTestId('server-status-label')).toHaveText('online');
+
+      await expect.poll(() => page.evaluate(() => window.tpg?.apiVersion)).toBe(1);
+      expect(await page.evaluate(() => 'require' in window || 'process' in window)).toBe(false);
 
       expect(pageErrors, 'renderer page errors').toEqual([]);
       expect(consoleErrors, 'renderer console errors').toEqual([]);

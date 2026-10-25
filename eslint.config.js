@@ -34,5 +34,26 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
+        Buffer: 'readonly',
+        clearInterval: 'readonly',
+        clearTimeout: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        process: 'readonly',
+        setInterval: 'readonly',
+        setTimeout: 'readonly',
+        TextDecoder: 'readonly',
+        TextEncoder: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+      },
+    },
+  },
   prettier,
 );

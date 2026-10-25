@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
+import { loadConfig } from '../../../src/shared/config';
 import { startServer } from '../../fixtures/server';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -54,6 +55,31 @@ test.describe('server CLI', () => {
     expect(result.stderr).toContain('expected an integer between 0 and 65535');
     expect(result.stderr).toContain('"-1"');
     expect(result.stderr).not.toContain('Missing value');
+  });
+
+  test('test mode requires an explicit data directory', () => {
+    const xdgDataHome = mkdtempSync(join(tmpdir(), 'tpg-cli-xdg-'));
+
+    try {
+      const result = runCli(
+        ['--port', '0'],
+        cleanEnv({ TPG_TEST: '1', XDG_DATA_HOME: xdgDataHome }),
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('Test mode requires an explicit data directory');
+    } finally {
+      rmSync(xdgDataHome, { recursive: true, force: true });
+    }
+  });
+
+  test('development mode defaults to the repository data/dev directory', () => {
+    const config = loadConfig({ argv: [], env: { TPG_DEV: '1' } });
+
+    expect(config.dev).toBe(true);
+    expect(config.test).toBe(false);
+    expect(config.dataDir).toBe(resolve(repoRoot, 'data', 'dev'));
   });
 
   test('rejects missing explicit config paths via CLI and TPG_CONFIG', () => {

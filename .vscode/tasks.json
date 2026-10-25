@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build:desktop",
+      "type": "npm",
+      "script": "build:desktop",
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ]
+}

@@ -51,24 +51,59 @@ E2E tests start the real server on a random port with a temporary data
 directory. The server runs with `TPG_TEST=1` and `--port 0`, prints a
 machine-readable URL line, and the fixture waits for `/health` before returning.
 
+The shared fixture exports two things:
+
+- `server` — the running server, with `baseURL`, `dataDir`, `request`, and
+  `getLogs()`. Use it for Electron tests that do not have a `page` fixture.
+- `app` — the `server` fixture plus a Chromium `page` already navigated to the
+  server. Use it for browser tests.
+
 ```ts
 import { test, expect } from '../../fixtures/server';
 
-test('launches', async ({ app }) => {
-  // app.page is already navigated to the server; app.baseURL points at it.
+test('browser scenario', async ({ app }) => {
+  // app.page is already navigated; app.baseURL, app.request, and app.getLogs() exist.
   await expect(app.page.getByRole('heading', { name: 'Twitch Plays GB' })).toBeVisible();
   const response = await app.request.get(`${app.baseURL}/health`);
   expect(response.status()).toBe(200);
 });
+
+test('server-only scenario', async ({ server }) => {
+  const response = await server.request.get('/health');
+  expect(response.status()).toBe(200);
+});
 ```
 
-The fixture kills the server process on teardown and deletes its temp directory.
-Never point tests at your real data directory.
+Test mode refuses to start without an explicit data directory. The fixture
+always passes a fresh temp directory through `--data-dir` and deletes it on
+teardown. Never point tests at your real data directory.
 
 Production-mode checks use `startServer({ mode: 'production' })`, which runs the
 built `dist/server/index.js` with `TPG_TEST=0` against `dist/web`. The production
 spec builds both artifacts in `beforeAll` on every run, so stale output is never
 tested by accident.
+
+## Electron project
+
+Electron tests live in `tests/e2e/electron` and use Playwright's `_electron`
+launcher against the real desktop bundle in `dist/desktop`. The spec builds that
+bundle in `beforeAll`, starts the real server through the `server` fixture, and
+passes its random-port URL to Electron:
+
+```ts
+const app = await electron.launch({
+  args: [`--user-data-dir=${join(server.dataDir, 'electron-profile')}`, repoRoot],
+  env: { ...process.env, TPG_SERVER_URL: server.baseURL },
+});
+const page = await app.firstWindow();
+await expect(page).toHaveTitle('Twitch Plays GB');
+await expect(page.getByTestId('server-status-label')).toHaveText('online');
+```
+
+Electron needs a display. On Linux CI this suite runs under
+`xvfb-run -a`. The launch adds `--no-sandbox` only when `CI` is set; production
+main always keeps the Chromium sandbox enabled. Tests use web-first assertions
+and fail if the renderer emits a page error or console error.
 
 ## Fake chat (planned, P0-15)
 

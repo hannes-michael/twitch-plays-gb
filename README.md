@@ -5,66 +5,88 @@ streaming. The app runs an Electron desktop shell and a local server; OBS
 captures either the built-in Browser Source overlay or a dedicated capture
 window.
 
-> Status: early development. The config-driven server and first-run UI walking
-> skeleton are runnable. Electron, emulator, Twitch, and OBS integration are
-> planned. See `PLAN.md` for the local implementation roadmap (not committed)
-> and `docs/TESTING.md` for the E2E-first workflow.
+> Status: walking skeleton. The config-driven server, first-run UI, Electron
+> shell, and one-command dev workflow are runnable. Emulator, Twitch, OBS, and
+> packaging integration are planned. See `PLAN.md` for the local implementation
+> roadmap (not committed) and `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
 - Node.js 22 (see `.nvmrc`)
-- Linux x64 or Windows x64
+- Linux x64 or Windows x64, with a display for the Electron window
 
-## Quick start (walking skeleton)
+## Quick start
 
 ```bash
 npm install
-npm run build:web
-npm run build:server
-npm start
+npm run dev
 ```
 
-The server binds to `127.0.0.1:3000` by default. Use `--port 0` to choose a
-random port; the server prints `TPG_URL=http://127.0.0.1:<port>` when ready.
+`npm run dev` starts the server with embedded Vite HMR, waits for health, builds
+the desktop bundle, and opens Electron. The server listens on
+`http://127.0.0.1:3000` by default and prints `TPG_URL=...`. Press `Ctrl+C` to
+stop everything.
+
+Browser-only development:
+
+```bash
+npm run dev:web
+```
+
+Open the printed URL in your browser.
+
+## Build and run
+
+```bash
+npm run build   # dist/web + dist/server + dist/desktop
+npm start       # production server with built web assets
+```
+
+To launch the desktop shell against an already-running server:
+
+```bash
+npm run dev:electron
+```
+
+The Electron shell loads `TPG_SERVER_URL` (default
+`http://127.0.0.1:3000`). It only accepts loopback URLs. See
+`docs/DEVELOPMENT.md` for the dev workflow, data directories, VS Code launch
+configs, and troubleshooting.
 
 ## Commands
 
-Available now:
-
 ```bash
-npm run build:web        # build the React UI
-npm run build:server     # build the server bundle
+npm run dev              # server watch + Vite HMR + Electron
+npm run dev:web          # browser-only dev server
+npm run dev:electron     # Electron against a running server
+npm run build            # build web, server, and desktop bundles
 npm start                # run the built server
-npm run dev:web          # standalone Vite UI (start the API server too)
-npm run dev:server       # server only; set TPG_DEV=1 for Vite middleware
 npm run typecheck
 npm run lint
 npm run format
 npm run format:check
-npm run test:e2e         # Playwright (chromium scenarios currently)
+npm run test:e2e         # Playwright (Chromium + Electron)
 npm run test:e2e:ui
 npm run test:e2e:headed
+npm run package:linux    # packaging scaffolding, not a full release build yet
+npm run package:win      # packaging scaffolding, not a full release build yet
 ```
 
-Planned, not yet implemented:
-
-```bash
-npm run dev              # Vite + server + Electron orchestration
-npm run dev:electron     # Electron shell only
-npm run build            # includes the desktop bundle
-npm run package:linux
-npm run package:win
-```
+Development data lives in the git-ignored `data/dev` directory. Tests use
+temporary directories and refuse to fall back to your real user data. Details
+are in `docs/DEVELOPMENT.md`.
 
 The server does not load `.env` automatically; export variables in your shell
 for now. See `.env.example`.
 
 ## Documentation
 
+- `docs/DEVELOPMENT.md` — dev commands, data directories, VS Code, troubleshooting
+- `docs/TESTING.md` — E2E-first workflow, fixtures, Electron tests
 - `docs/DECISIONS.md` — architecture decisions and spike outcomes
-- `docs/TESTING.md` — E2E-first workflow and fixtures
 
-OBS and development guides are planned but not written yet.
+OBS setup (`docs/OBS.md`) and the fake chat/debug panels are planned but not
+written yet.
 
 ## Legal
 

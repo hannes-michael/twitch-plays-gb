@@ -2,22 +2,28 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Server (tsx)",
+      "name": "Server (dev, tsx)",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["tsx", "src/server/index.ts", "--port", "3000"],
-      "env": { "TPG_DEV": "1" },
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "tsx", "src/server/index.ts", "--port", "3000"],
+      "env": { "TPG_DEV": "1", "TPG_TEST": "0" },
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },
     {
-      "name": "Electron main",
+      "name": "Electron main (dev server required)",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["electron", "."],
-      "env": { "TPG_DEV": "1", "TPG_SERVER_URL": "http://127.0.0.1:3000" },
+      "runtimeExecutable": "${workspaceFolder}/node_modules/electron/dist/electron",
+      "windows": {
+        "runtimeExecutable": "${workspaceFolder}/node_modules/electron/dist/electron.exe"
+      },
+      "program": "${workspaceFolder}/dist/desktop/main.cjs",
+      "preLaunchTask": "build:desktop",
+      "env": { "TPG_SERVER_URL": "http://127.0.0.1:3000" },
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },
@@ -25,8 +31,13 @@
       "name": "Playwright: chromium",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["playwright", "test", "--project=chromium"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "${workspaceFolder}/node_modules/@playwright/test/cli.js",
+        "test",
+        "--project=chromium"
+      ],
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },
@@ -34,8 +45,13 @@
       "name": "Playwright: electron",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["playwright", "test", "--project=electron"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "${workspaceFolder}/node_modules/@playwright/test/cli.js",
+        "test",
+        "--project=electron"
+      ],
+      "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     }
