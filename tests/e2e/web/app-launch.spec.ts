@@ -1,3 +1,5 @@
+import { once } from 'node:events';
+import WebSocket from 'ws';
 import { test, expect } from '../../fixtures/server';
 
 test.describe('app launch', () => {
@@ -71,5 +73,18 @@ test.describe('app launch', () => {
     await expect(notice).toBeVisible();
     await expect(notice).not.toContainText(/saved for this session/i);
     await expect(notice).toContainText(/not saved|not available yet|preview/i);
+  });
+
+  test('answers ping on /ws without disturbing Vite HMR upgrades', async ({ server }) => {
+    const socket = new WebSocket(`${server.baseURL.replace(/^http/, 'ws')}/ws`);
+
+    try {
+      await once(socket, 'open');
+      socket.send(JSON.stringify({ type: 'ping' }));
+      const [data] = await once(socket, 'message');
+      expect(JSON.parse(data.toString())).toEqual({ type: 'pong' });
+    } finally {
+      socket.close();
+    }
   });
 });

@@ -2,15 +2,26 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { expect, test } from '../../fixtures/server';
+import { expect, startServer, test, type TestServer } from '../../fixtures/server';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
+let hmrHolder: TestServer | undefined;
+
 test.describe('electron app launch', () => {
-  test.beforeAll(() => {
+  test.beforeAll(async () => {
     // The Electron project runs from the real desktop bundle, so make sure the
     // test never exercises a stale or missing build.
     execSync('npm run build:desktop', { cwd: repoRoot, stdio: 'inherit' });
+
+    // Simulate an already-running dev server: this server owns Vite's HMR
+    // socket before the fixture server starts. A shared fixed HMR port would
+    // break the Electron renderer's own HMR client.
+    hmrHolder = await startServer();
+  });
+
+  test.afterAll(async () => {
+    await hmrHolder?.stop();
   });
 
   test('opens the setup screen in a secure window against the real server', async ({ server }) => {
