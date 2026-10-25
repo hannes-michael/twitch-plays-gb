@@ -15,6 +15,8 @@ export interface TestServer {
   baseURL: string;
   dataDir: string;
   pid: number | undefined;
+  /** Exit code after the process has exited, or null while it is running. */
+  readonly exitCode: number | null;
   getLogs(): string;
   stop(): Promise<void>;
 }
@@ -346,6 +348,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
       baseURL,
       dataDir,
       pid: child.pid,
+      get exitCode() {
+        return child.exitCode;
+      },
       getLogs: logs,
       stop,
     };

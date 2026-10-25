@@ -1,34 +1,66 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
+import { APP_WS_PATH, upgradePathname } from './upgrade-paths';
 
-const WS_PATH = '/ws';
+export interface WebSocketServerOptions {
+  /** Upgrade paths owned by another listener (Vite HMR in dev/test). */
+  passThroughPaths?: readonly string[];
+}
+
+function rejectUpgrade(socket: Duplex): void {
+  const netSocket = socket as Socket;
+  netSocket.on('error', () => {});
+
+  const body = 'Bad Request';
+  const response = [
+    'HTTP/1.1 400 Bad Request',
+    'Connection: close',
+    'Content-Type: text/plain; charset=utf-8',
+    `Content-Length: ${body.length}`,
+    '',
+    body,
+  ].join('\r\n');
+
+  try {
+    netSocket.write(response);
+    netSocket.destroySoon();
+  } catch {
+    netSocket.destroy();
+  }
+}
 
 export function createWebSocketServer(
   httpServer: HttpServer,
   state: ServerState,
   logger: Logger,
+  options: WebSocketServerOptions = {},
 ): WebSocketServer {
   // Use noServer so this server only claims its own upgrade path. Vite attaches
   // its HMR upgrade listener to the same HTTP server; a path-scoped
   // `new WebSocketServer({ server, path })` would abort Vite's upgrades.
   const wss = new WebSocketServer({ noServer: true });
+  const passThroughPaths = new Set(options.passThroughPaths ?? []);
 
   const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
-    let pathname: string;
-    try {
-      pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
-    } catch {
+    const pathname = upgradePathname(request.url);
+
+    if (pathname === APP_WS_PATH) {
+      wss.handleUpgrade(request, socket, head, (webSocket) => {
+        wss.emit('connection', webSocket, request);
+      });
       return;
     }
 
-    if (pathname !== WS_PATH) return;
+    // Vite's listener owns its path and has already handled the upgrade.
+    if (pathname !== undefined && passThroughPaths.has(pathname)) return;
 
-    wss.handleUpgrade(request, socket, head, (webSocket) => {
-      wss.emit('connection', webSocket, request);
-    });
+    // Never leave unknown upgrades half-open: they would block graceful
+    // shutdown until the forced-exit timeout.
+    rejectUpgrade(socket);
   };
 
   httpServer.on('upgrade', handleUpgrade);

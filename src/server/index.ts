@@ -4,6 +4,7 @@ import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
 import { createLogger } from './logger';
 import { createServerState } from './state';
+import { VITE_HMR_PATH } from './upgrade-paths';
 import { createWebSocketServer } from './ws';
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -57,7 +58,9 @@ async function main(): Promise<void> {
 
   const { app, close: closeApp } = appContext;
   httpServer.on('request', app);
-  const wss = createWebSocketServer(httpServer, state, logger);
+  const wss = createWebSocketServer(httpServer, state, logger, {
+    passThroughPaths: config.dev || config.test ? [VITE_HMR_PATH] : [],
+  });
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {

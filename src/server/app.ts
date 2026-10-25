@@ -6,13 +6,13 @@ import express, { type Express } from 'express';
 import type { AppConfig } from '../shared/config';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
+import { VITE_HMR_PATH } from './upgrade-paths';
 import { readPackageVersion } from './version';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 const webRoot = join(projectRoot, 'web');
 const distWebRoot = join(projectRoot, 'dist', 'web');
 const viteConfigPath = join(projectRoot, 'vite.config.ts');
-const VITE_HMR_PATH = '/__vite_hmr';
 
 export interface AppContext {
   app: Express;
