@@ -25,6 +25,15 @@ interface EmulatorStatus {
   audioChunks: number;
 }
 
+interface DebugStatus {
+  mode: string;
+  timings: {
+    democracyWindowMs: number;
+    holdFrames: number;
+    releaseFrames: number;
+  };
+}
+
 function readServerPid(logs: string): number | undefined {
   const ready = /\[desktop\] server child ready at \S+ \(pid (\d+)\)/.exec(logs);
   if (ready) return Number(ready[1]);
@@ -163,6 +172,96 @@ test.describe('electron server child', () => {
 
       await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       expect(existsSync(dataDir)).toBe(false);
+    } catch (error) {
+      await testInfo.attach('electron-server-child-logs', {
+        body: electronLogs || '(no Electron output captured)',
+        contentType: 'text/plain',
+      });
+      throw error;
+    } finally {
+      await app?.close().catch(() => {});
+      if (serverPid !== undefined && isProcessRunning(serverPid)) {
+        try {
+          process.kill(serverPid, 'SIGKILL');
+        } catch {
+          // The process exited between the check and the signal.
+        }
+      }
+      await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
+        () => {},
+      );
+    }
+  });
+
+  test('forwards chat timing environment to the spawned server', async ({
+    playwright: _playwright,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+
+    const dataDir = await mkdtemp(join(tmpdir(), 'tpg-electron-timings-'));
+    let app: ElectronApplication | undefined;
+    let electronLogs = '';
+    let serverPid: number | undefined;
+
+    const collectLogs = (chunk: Buffer | string): void => {
+      electronLogs += chunk.toString();
+      if (electronLogs.length > 200_000) electronLogs = electronLogs.slice(-200_000);
+    };
+
+    try {
+      app = await electron.launch({
+        args: [
+          ...(process.env.CI ? ['--no-sandbox'] : []),
+          `--user-data-dir=${join(dataDir, 'electron-profile')}`,
+          repoRoot,
+        ],
+        cwd: repoRoot,
+        env: createElectronEnv({
+          TPG_DEV: '0',
+          TPG_TEST: '1',
+          TPG_DATA_DIR: dataDir,
+          TPG_DEMOCRACY_WINDOW_MS: '750',
+          TPG_HOLD_FRAMES: '2',
+          TPG_RELEASE_FRAMES: '1',
+          TPG_LOG_LEVEL: 'debug',
+        }),
+      });
+
+      const electronProcess = app.process();
+      electronProcess.stdout?.on('data', collectLogs);
+      electronProcess.stderr?.on('data', collectLogs);
+
+      await expect
+        .poll(() => readServerUrl(electronLogs) !== undefined, { timeout: 30_000 })
+        .toBe(true);
+      serverPid = readServerPid(electronLogs);
+      expect(serverPid).toBeGreaterThan(0);
+
+      const page = await app.firstWindow();
+      await expect(page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
+
+      const debug = await page.evaluate(async () => {
+        const response = await fetch('/api/debug');
+        return { status: response.status, body: (await response.json()) as DebugStatus };
+      });
+      expect(debug.status).toBe(200);
+      expect(debug.body).toMatchObject({
+        mode: 'test',
+        timings: {
+          democracyWindowMs: 750,
+          holdFrames: 2,
+          releaseFrames: 1,
+        },
+      });
+
+      await app.close();
+      app = undefined;
+
+      await expect
+        .poll(() => isProcessRunning(serverPid as number), { timeout: 10_000 })
+        .toBe(false);
+
+      await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch (error) {
       await testInfo.attach('electron-server-child-logs', {
         body: electronLogs || '(no Electron output captured)',

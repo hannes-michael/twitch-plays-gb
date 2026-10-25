@@ -778,8 +778,18 @@ function createChildEnv(dataDir: string): NodeJS.ProcessEnv {
 
   // Only forward app configuration that the child understands. In particular,
   // never forward a stale TPG_SERVER_URL, TPG_SERVER_ENTRY, TPG_CAPTURE, or the
-  // raw TPG_ROM (the resolved absolute ROM is passed as --rom instead).
-  if (process.env.TPG_LOG_LEVEL !== undefined) env.TPG_LOG_LEVEL = process.env.TPG_LOG_LEVEL;
+  // raw TPG_ROM (the resolved absolute ROM is passed as --rom instead). Timing
+  // values are normal config and must reach the desktop-spawned child too.
+  const forwardedKeys = [
+    'TPG_LOG_LEVEL',
+    'TPG_DEMOCRACY_WINDOW_MS',
+    'TPG_HOLD_FRAMES',
+    'TPG_RELEASE_FRAMES',
+  ] as const;
+  for (const key of forwardedKeys) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
 
   return env;
 }
