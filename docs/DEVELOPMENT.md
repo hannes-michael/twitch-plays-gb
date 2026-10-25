@@ -46,6 +46,34 @@ The server logs its resolved data directory on startup. Vite's HMR WebSocket is
 served by that same server on `/__vite_hmr`, so concurrent dev/test servers do
 not share a fixed HMR port.
 
+## Booting a ROM
+
+Pass a `.gb`, `.gbc`, or `.gba` file through normal configuration to boot the
+emulator when the server starts. The path can be relative to the current
+directory; the server stores it as an absolute path. Missing files and other
+extensions are configuration errors.
+
+```bash
+# One-command dev (env var; `npm run dev` forwards args to Electron)
+TPG_ROM=tests/fixtures/roms/test_gb.gb npm run dev
+
+# Browser-only server with a CLI flag
+npm run dev:web -- --rom tests/fixtures/roms/test_gb.gb
+
+# Built server
+npm start -- --rom tests/fixtures/roms/test_gb.gb
+```
+
+The server starts without a ROM by default, so `/`, `/health`, and the setup
+screen keep working. With a ROM, `/api/emulator/status` reports the model,
+dimensions, frame/audio counters, and 48 kHz audio state, and
+`/overlay?client=obs` renders the live canvas and audio. Browsers block audio
+until a user gesture: click **Unmute audio** in the overlay (OBS Browser Source
+has its own audio-permission setting).
+
+`tests/fixtures/roms/` contains open-source homebrew ROMs for automated tests;
+they are not playable games. See `NOTICE.md` there for licenses.
+
 ## Commands
 
 | Command                   | What it does                                                                          |
@@ -184,6 +212,8 @@ server URLs (`127.0.0.1`, `localhost`, or `[::1]`).
 
 ## Planned developer tools
 
-The fake chat panel/source (P0-15) and the emulator/chat/frame debug panel
-(P0-11) are not implemented yet. When they land they will be documented here.
-OBS setup documentation is also planned in `docs/OBS.md`.
+The fake chat panel/source (P0-15) and the full emulator/chat/frame debug panel
+(P0-11) are not implemented yet. The OBS overlay already exposes status, FPS,
+frame, audio, WebSocket, and audio-unlock counters for tests. When the full
+panel lands it will be documented here. OBS setup documentation is also planned
+in `docs/OBS.md`.

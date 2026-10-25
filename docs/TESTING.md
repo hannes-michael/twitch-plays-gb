@@ -78,6 +78,25 @@ Test mode refuses to start without an explicit data directory. The fixture
 always passes a fresh temp directory through `--data-dir` and deletes it on
 teardown. Never point tests at your real data directory.
 
+The vendored ROMs under `tests/fixtures/roms/` boot through the normal `--rom`
+config path:
+
+```ts
+const server = await startServer({ rom: 'tests/fixtures/roms/test_gb.gb' });
+```
+
+For tests that use the `app`/`page` fixture, set the Playwright option instead:
+
+```ts
+test.use({ emulatorRom: join(romDir, 'test_gb.gb') });
+```
+
+`emulator-boot.spec.ts` boots GB, GBC, and GBA in one scenario and checks model,
+native dimensions, frame/audio counters, 48 kHz audio, and `/health`.
+`overlay-media.spec.ts` loads `/overlay?client=obs`, checks canvas dimensions
+and pixels, growing counters, and the click-to-unmute audio path. Both wait on
+real status/counters with `expect.poll`; do not replace them with sleeps.
+
 Production-mode checks use `startServer({ mode: 'production' })`, which runs the
 built `dist/server/index.js` with `TPG_TEST=0` against `dist/web`. The production
 spec builds both artifacts in `beforeAll` on every run, so stale output is never

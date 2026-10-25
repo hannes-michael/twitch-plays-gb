@@ -6,9 +6,10 @@ captures either the built-in Browser Source overlay or a dedicated capture
 window.
 
 > Status: walking skeleton. The config-driven server, first-run UI, Electron
-> shell, and one-command dev workflow are runnable. Emulator, Twitch, OBS, and
-> packaging integration are planned. See `PLAN.md` for the local implementation
-> roadmap (not committed) and `docs/TESTING.md` for the E2E-first workflow.
+> shell, one-command dev workflow, and local GB/GBC/GBA video/audio overlay are
+> runnable. Twitch, OBS setup docs, and packaging integration are planned. See
+> `PLAN.md` for the local implementation roadmap (not committed) and
+> `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
@@ -19,13 +20,15 @@ window.
 
 ```bash
 npm install
-npm run dev
+TPG_ROM=/path/to/game.gb npm run dev
 ```
 
 `npm run dev` starts the server with embedded Vite HMR, waits for health, builds
 the desktop bundle, and opens Electron. The server listens on
-`http://127.0.0.1:3000` by default and prints `TPG_URL=...`. Press `Ctrl+C` to
-stop everything.
+`http://127.0.0.1:3000` by default and prints `TPG_URL=...`. Run without
+`TPG_ROM` to open the setup screen only, or open
+`http://127.0.0.1:3000/overlay?client=obs` for the OBS overlay. Press `Ctrl+C`
+to stop everything.
 
 Browser-only development:
 

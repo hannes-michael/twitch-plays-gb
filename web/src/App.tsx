@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import type { EmulatorLifecycleStatus } from '@shared/emulator-status';
 
 type ServerStatus = 'checking' | 'online' | 'offline';
 
@@ -6,7 +7,7 @@ interface HealthResponse {
   status: 'ok';
   version: string;
   uptime: number;
-  emulator: 'stopped';
+  emulator: EmulatorLifecycleStatus;
   clients: { total: number };
 }
 
