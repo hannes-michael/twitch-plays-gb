@@ -7,10 +7,12 @@ window.
 
 > Status: walking skeleton. The config-driven server, first-run UI, Electron
 > shell (including a spawned server child and OBS capture window), one-command
-> dev workflow, local GB/GBC/GBA video/audio overlay, and OBS setup guide are
-> runnable. Twitch chat and packaged-app validation are planned. See `PLAN.md`
-> for the local implementation roadmap (not committed) and `docs/TESTING.md`
-> for the E2E-first workflow.
+> dev workflow, local GB/GBC/GBA video/audio overlay, OBS setup guide, and
+> Linux AppImage/.deb builds are runnable. Linux packaged builds pass a headless
+> smoke test; Windows packaging is wired for CI but has not been executed in the
+> development environment. Twitch chat is planned, and OBS capture is still a
+> manual checklist. See `PLAN.md` for the local implementation roadmap (not
+> committed) and `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
@@ -65,6 +67,23 @@ See `docs/OBS.md` for Browser Source and Window Capture steps and
 `docs/DEVELOPMENT.md` for the dev workflow, data directories, VS Code launch
 configs, and troubleshooting.
 
+## Packaged builds
+
+```bash
+npm run package:linux    # AppImage + .deb in release/
+npm run package:win      # NSIS installer + portable .exe in release/
+npm run smoke:packaged -- --linux
+```
+
+The packaged smoke test launches each artifact with `--self-test`, which runs
+the real Electron-as-Node server child without opening any windows. It checks
+the packaged SPA and `/overlay?client=obs`, and with `TPG_ROM` set it waits for
+the native node-mgba worker to produce video frames and 48 kHz audio. On Linux
+it runs the AppImage and `.deb`; add `--unpacked` for a fast
+`release/linux-unpacked` check. Windows targets run on Windows, or with
+`--win --wine` as a best-effort local check. Release artifacts are not
+committed. See `docs/TESTING.md` for the full matrix and options.
+
 ## Commands
 
 ```bash
@@ -80,8 +99,9 @@ npm run format:check
 npm run test:e2e         # Playwright (Chromium + Electron)
 npm run test:e2e:ui
 npm run test:e2e:headed
-npm run package:linux    # packaging scaffolding, not a full release build yet
-npm run package:win      # packaging scaffolding, not a full release build yet
+npm run package:linux    # build Linux AppImage + .deb
+npm run package:win      # build Windows NSIS installer + portable .exe
+npm run smoke:packaged   # headless smoke test for packaged artifacts
 ```
 
 Development data lives in the git-ignored `data/dev` directory. Tests use

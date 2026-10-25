@@ -36,6 +36,7 @@ npm run test:e2e:ui       # Playwright UI mode
 npm run test:e2e:headed   # visible browser/Electron
 npm run test:e2e -- --project=chromium
 npm run test:e2e -- --project=electron
+npm run smoke:packaged -- --linux   # packaged AppImage + .deb smoke
 ```
 
 ## Projects
@@ -137,6 +138,48 @@ Electron needs a display. On Linux CI this suite runs under
 `xvfb-run -a`. The launch adds `--no-sandbox` only when `CI` is set; production
 main always keeps the Chromium sandbox enabled. Tests use web-first assertions
 and fail if the renderer emits a page error or console error.
+
+## Packaged smoke (P0-28)
+
+The Playwright suite covers source builds. Packaged artifacts get a separate,
+dependency-free Node harness:
+
+```bash
+npm run package:linux
+npm run smoke:packaged -- --linux
+
+npm run package:win
+npm run smoke:packaged -- --win          # Windows
+npm run smoke:packaged -- --win --wine   # best effort on Linux
+```
+
+`scripts/smoke-packaged.mjs` launches each selected artifact with `--self-test`.
+Self-test mode is headless: no dashboard/capture windows, no menu, no dialogs.
+It still spawns the real server child through Electron-as-Node and checks:
+
+- the child has a real PID and `/health` is healthy;
+- `GET /` and `GET /overlay?client=obs` return 200 HTML from the packaged
+  assets, not Vite middleware;
+- the child logs show `dev=false test=false` even when the harness exports
+  `TPG_DEV=1`/`TPG_TEST=1`;
+- with `TPG_ROM`, `/api/emulator/status` becomes `running` with a model and
+  native dimensions, growing video/audio counters, and 48000 Hz audio;
+- the child exits and its PID is gone after the app exits.
+
+The harness sets `TPG_DATA_DIR` to a temp directory and `TPG_ROM` to the
+vendored GB ROM, and removes both the data directory and any extraction
+directory afterwards. `--no-rom` checks the server/UI path without the emulator.
+Linux uses `xvfb-run -a` when no display is set and it is installed. The
+AppImage is first attempted with `APPIMAGE_EXTRACT_AND_RUN=1`; if the runtime
+hangs before launching, the harness extracts it with `--appimage-extract` and
+runs the extracted `AppRun`. The `.deb` is extracted with `dpkg-deb` or
+`ar` + `tar`.
+
+The harness adds `--no-sandbox` only when the host is root or Chromium reports a
+sandbox failure. This is a test-runner workaround, never a production default.
+Logs are written to `test-results/packaged-smoke/` (git-ignored). The separate
+`package-smoke.yml` workflow runs Linux under Xvfb and Windows natively, and
+uploads logs/artifacts on failure.
 
 ## Fake chat (planned, P0-15)
 

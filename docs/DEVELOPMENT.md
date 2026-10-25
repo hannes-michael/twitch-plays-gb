@@ -95,8 +95,9 @@ they are not playable games. See `NOTICE.md` there for licenses.
 | `npm run test:e2e`        | All Playwright projects (Chromium + Electron)                                         |
 | `npm run test:e2e:ui`     | Playwright UI mode                                                                    |
 | `npm run test:e2e:headed` | Playwright with visible browser/Electron windows                                      |
-| `npm run package:linux`   | Build, then run electron-builder for Linux                                            |
-| `npm run package:win`     | Build, then run electron-builder for Windows                                          |
+| `npm run package:linux`   | Build, then run electron-builder for Linux (AppImage + .deb)                          |
+| `npm run package:win`     | Build, then run electron-builder for Windows (NSIS + portable)                        |
+| `npm run smoke:packaged`  | Headless smoke test for packaged artifacts (see `docs/TESTING.md`)                    |
 
 `dev:web` prints `TPG_URL=http://127.0.0.1:<port>` when the server is ready.
 Open that URL in a browser. Override the port with `TPG_PORT=3001` or, for the
@@ -132,10 +133,74 @@ entry; it serves built assets rather than mounting Vite. `TPG_DATA_DIR` still
 wins when explicitly set; otherwise packaged apps use Electron's `userData`
 directory.
 
-Packaging is still P0-28. The electron-builder config now unpacks `dist/**`,
-`package.json`, and runtime `node_modules/**` so the spawned server entry can
-resolve bare imports and load `node-mgba`'s worker and native libraries outside
-the asar. No packaged artifact is built or validated in this cycle.
+## Packaging and packaged smoke tests
+
+`npm run package:linux` builds the AppImage and `.deb` into `release/`.
+`npm run package:win` builds the NSIS installer and portable `.exe` there. The
+electron-builder config unpacks `dist/**`, `package.json`, and runtime
+`node_modules/**` so the spawned server entry can resolve bare imports and load
+`node-mgba`'s worker and native libraries outside the asar. `release/` is
+git-ignored; never commit build artifacts.
+
+Every artifact is checked through the packaged app's headless self-test mode:
+
+```bash
+npm run smoke:packaged -- --linux              # AppImage + .deb
+npm run smoke:packaged -- --linux --unpacked   # also release/linux-unpacked
+npm run smoke:packaged -- --linux --no-rom     # server/UI checks only
+npm run smoke:packaged -- --win                # on Windows
+npm run smoke:packaged -- --win --wine         # best effort on Linux
+```
+
+The harness invokes each app with `--self-test` (the app also accepts
+`TPG_SELF_TEST=1`). Self-test mode opens no dashboard or capture window, builds
+no menu, and shows no dialogs. It still spawns the real server child through
+Electron-as-Node, serves the packaged web assets, and, when `TPG_ROM` is set,
+boots the native node-mgba worker. It prints a machine-readable line such as:
+
+```text
+TPG_SELF_TEST_OK packaged=1 rom=1 model=DMG size=160x144 frames=... audio=... sampleRate=48000 pid=...
+```
+
+A failure prints `TPG_SELF_TEST_FAIL reason=...` plus the server log tail and
+exits non-zero. The app stops the server child before exiting.
+
+Self-test data handling:
+
+- `TPG_DATA_DIR` is used when set; otherwise a temp directory under the OS temp
+  directory is created and removed on exit. The harness always passes its own
+  temp directory and removes it after checking for orphan processes.
+- `TPG_ROM` is resolved like the normal spawn path (absolute, then relative to
+  the working directory or data directory) and passed to the child as an
+  absolute `--rom`. Without it the server/UI checks still run.
+- Packaged self-test forces the child to production mode (`TPG_DEV=0`,
+  `TPG_TEST=0`) and verifies the logs/HTML contain no Vite middleware. The
+  harness sets `TPG_DEV=1` and `TPG_TEST=1` on purpose to prove they are
+  ignored.
+
+Linux needs a display. The harness uses `xvfb-run -a` automatically when
+`DISPLAY`/`WAYLAND_DISPLAY` is unset and `xvfb-run` is installed; otherwise it
+fails with an actionable message. It first tries the AppImage with
+`APPIMAGE_EXTRACT_AND_RUN=1`. On hosts where the AppImage runtime hangs before
+launching the app (observed during P0-28), it falls back to the runtime's own
+`--appimage-extract` and runs the extracted `AppRun`; both paths avoid FUSE.
+The `.deb` is extracted with `dpkg-deb` or, when unavailable, `ar` + `tar`.
+
+The harness adds `--no-sandbox` only when the host is root or Chromium reports a
+sandbox failure. Production Electron code never adds `--no-sandbox`.
+
+Windows targets require Windows or `--wine`. The portable executable is run
+directly. The NSIS installer is installed silently to a temp directory
+(`/S /D=<dir>`, `/D` last), the installed app runs `--self-test`, and the
+uninstaller is invoked. Installer automation under Wine is best effort; the
+harness reports a failure rather than converting it into a pass. The
+`.github/workflows/package-smoke.yml` workflow runs the native Windows path.
+
+Cross-building Windows packages on Linux is not a supported validation path.
+electron-builder's NSIS uninstaller step runs an intermediate installer under
+Wine and can hang, and a portable cross-build can miss Windows-only optional
+binaries such as `sharp`. Use a Windows host or the Windows CI job for a real
+Windows artifact; `--wine` is useful only for quick diagnostics.
 
 ## Capture window
 

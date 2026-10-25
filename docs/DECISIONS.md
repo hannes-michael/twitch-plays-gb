@@ -54,7 +54,7 @@ suite. Integration tests are added only when a bug cannot be reproduced E2E.
 
 ## ADR-006: Electron-as-Node for the server child process
 
-**Status:** accepted (validated in P0-27/P0-29 on Linux x64; Windows pending CI)
+**Status:** accepted (validated in P0-27/P0-28/P0-29 on Linux x64; Windows pending CI)
 
 The server starts as a child process using the Electron binary with
 `ELECTRON_RUN_AS_NODE=1`, so the packaged app does not ship a second Node
@@ -99,6 +99,18 @@ resolved in the desktop main process against the process working directory and
 then the data directory before spawning; the child only receives an absolute
 `--rom` path.
 
+**Packaged smoke result (2026-10-25):** go on Linux x64 for both AppImage and
+`.deb`. The headless `--self-test` mode spawns the real server child, serves the
+packaged SPA and `/overlay?client=obs` without Vite, and boots the vendored GB
+ROM through native `node-mgba`/koffi with a worker. Both artifacts reported
+`DMG 160x144`, video frames > 0, audio chunks > 0, and 48000 Hz. The child PID
+was gone after the app exited and temp directories were removed. The harness
+sets inherited `TPG_DEV=1`/`TPG_TEST=1`; the packaged child still logged
+`dev=false test=false`. The AppImage runtime hung with
+`APPIMAGE_EXTRACT_AND_RUN=1` on the development host, so the harness falls back
+to `--appimage-extract` and runs the extracted `AppRun`; this is a test-host
+workaround, not an application change.
+
 ## ADR-007: Capture window reuses the overlay with a stable OBS title
 
 **Status:** accepted (P0-26; OBS manual verification pending)
@@ -114,3 +126,40 @@ matches a stable source. It opens at startup with `TPG_CAPTURE=1` or from
 bounds, tray integration, and audio autoplay persistence are P1 work. OBS is not
 installed in the development environment, so `docs/OBS.md` remains an unexecuted
 manual checklist.
+
+## ADR-008: P0 go/no-go — Linux packaged path proven; Windows and OBS manual pending
+
+**Status:** accepted (P0-28/P0-30, 2026-10-25)
+
+**Decision: GO for Linux x64. The overall P0 exit criteria remain conditional on
+Windows CI execution and the manual OBS checks.**
+
+Proven in this cycle:
+
+- Linux AppImage and `.deb` build reproducibly with `npm run package:linux` and
+  pass the headless packaged smoke test with a real ROM.
+- Electron-as-Node runs the unpacked server entry from both artifacts, loads
+  native `node-mgba`/koffi, and runs its worker thread.
+- The packaged server serves the built SPA and `/overlay?client=obs`, never
+  mounts Vite, and ignores inherited `TPG_DEV`/`TPG_TEST`.
+- The emulator reports `DMG 160x144`, growing video/audio counters, and 48000 Hz
+  audio; the server child is stopped and no orphan remains.
+- The software side of both OBS paths is covered by E2E: Browser Source
+  (`/overlay?client=obs`) and the stable-title capture window. Actual OBS
+  capture is still manual.
+
+Remaining before the P0 exit criteria are fully met:
+
+- Build and run the NSIS installer and portable `.exe` on Windows. The
+  `package-smoke.yml` workflow wires this, but it was not executed in this
+  environment. The `--win --wine` path is best effort and is not a substitute
+  for a native Windows run.
+- Execute the OBS checklist in `docs/OBS.md` on Linux X11/Wayland and Windows.
+- Re-run the packaged smoke on a host where the AppImage runtime works directly;
+  the harness already tries `APPIMAGE_EXTRACT_AND_RUN=1` first and only falls
+  back to extraction when the runtime hangs before launch.
+
+No architecture change is required for Linux. If Windows Electron-as-Node or
+the native ABI fails, ADR-006's fallback to a bundled Node 22 server runtime
+remains the contingency; no fallback is used on Linux. No P1 features were
+implemented in this cycle.
