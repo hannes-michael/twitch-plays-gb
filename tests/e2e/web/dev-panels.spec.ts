@@ -37,6 +37,9 @@ test.describe('developer panels', () => {
     await expect(app.page.getByTestId('debug-democracy-window')).toHaveText('15000');
     await expect(app.page.getByTestId('debug-hold-frames')).toHaveText('8');
     await expect(app.page.getByTestId('debug-release-frames')).toHaveText('4');
+    await expect(app.page.getByTestId('debug-autosave-interval')).toHaveText('60000');
+    await expect(app.page.getByTestId('debug-last-saved')).toHaveText('never');
+    await expect(app.page.getByTestId('debug-save-count')).toHaveText('0');
 
     // The panel reports the server's real WebSocket client count, not a mock.
     await expect(app.page.getByTestId('debug-clients')).toHaveText('0');

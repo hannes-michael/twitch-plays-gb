@@ -32,6 +32,10 @@ export interface StartServerOptions {
   host?: string;
   /** Extra environment values applied after the fixture's isolation defaults. */
   env?: NodeJS.ProcessEnv;
+  /** Reuse an existing data directory across restarts instead of creating one. */
+  dataDir?: string;
+  /** Remove the data directory on stop; defaults to true only for fixture-created dirs. */
+  cleanupDataDir?: boolean;
   /** Seed the temporary data directory after creation and before server startup. */
   prepareDataDir?: (dataDir: string) => void | Promise<void>;
 }
@@ -265,12 +269,17 @@ function createServerEnv(
 export async function startServer(options: StartServerOptions = {}): Promise<TestServer> {
   const production = options.mode === 'production';
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
-  const dataDir = await mkdtemp(join(tmpdir(), 'tpg-e2e-'));
+  const ownsDataDir = options.dataDir === undefined;
+  const dataDir = options.dataDir ?? (await mkdtemp(join(tmpdir(), 'tpg-e2e-')));
+  const cleanupDataDir = options.cleanupDataDir ?? ownsDataDir;
+  const removeDataDir = async (): Promise<void> => {
+    if (cleanupDataDir) await rm(dataDir, { recursive: true, force: true });
+  };
   if (options.prepareDataDir) {
     try {
       await options.prepareDataDir(dataDir);
     } catch (error) {
-      await rm(dataDir, { recursive: true, force: true });
+      await removeDataDir();
       throw new Error(
         `Failed to prepare test data directory: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error },
@@ -298,7 +307,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir();
     throw new Error(
       `Failed to start server process: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
@@ -308,7 +317,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   const { stdout, stderr } = child;
   if (!stdout || !stderr) {
     killProcessTree(child, 'SIGKILL');
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir();
     throw new Error('Failed to capture server stdout/stderr.');
   }
 
@@ -351,7 +360,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
       }
     }
 
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir();
 
     if (forcedShutdown) {
       throw new Error(

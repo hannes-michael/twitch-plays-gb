@@ -106,6 +106,7 @@ test.describe('server CLI', () => {
         inputMaxQueue: 10,
         inputMaxPerSecond: 5,
         inputStaleMs: 5_000,
+        autosaveIntervalMs: 60_000,
       });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -220,6 +221,7 @@ test.describe('server fixture', () => {
           inputMaxQueue: 2,
           inputMaxPerSecond: 2,
           inputStaleMs: 500,
+          autosaveIntervalMs: 60_000,
         },
       });
 
