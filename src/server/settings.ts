@@ -43,7 +43,15 @@ export class SettingsStore {
   }
 
   async init(): Promise<void> {
-    const raw = await readJsonFile(this.filePath);
+    let raw: unknown;
+    try {
+      raw = await readJsonFile(this.filePath);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      this.logger.warn('settings file is invalid; starting with defaults');
+      return;
+    }
+
     if (raw === undefined) return;
 
     const parsed = SettingsFileSchema.safeParse(raw);

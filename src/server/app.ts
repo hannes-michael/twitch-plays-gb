@@ -109,6 +109,19 @@ export async function createApp(
     };
   };
 
+  const resolveEmulatorStart = (
+    explicitRomId: string | undefined,
+  ): { options: EmulatorStartOptions } | { status: number; error: string } => {
+    if (explicitRomId !== undefined) return resolveRomStart(explicitRomId);
+
+    // A --rom or imported session keeps its last successful start options so
+    // Start/Restart without a body can never silently switch to another game.
+    const lastStart = emulator.getLastStartOptions();
+    if (lastStart) return { options: lastStart };
+
+    return resolveRomStart(emulator.status().romId ?? settings.getRomId() ?? undefined);
+  };
+
   apiRouter.get('/emulator/status', (_request, response) => {
     response.set('Cache-Control', 'no-store');
     response.json(emulator.status());
@@ -211,11 +224,8 @@ export async function createApp(
         return;
       }
 
-      const romId =
-        (typeof body.romId === 'string' ? body.romId : undefined) ??
-        settings.getRomId() ??
-        undefined;
-      const resolved = resolveRomStart(romId);
+      const romId = typeof body.romId === 'string' ? body.romId : undefined;
+      const resolved = resolveEmulatorStart(romId);
       if ('error' in resolved) {
         response.status(resolved.status).json({ error: resolved.error });
         return;
@@ -249,12 +259,8 @@ export async function createApp(
         return;
       }
 
-      const romId =
-        (typeof body.romId === 'string' ? body.romId : undefined) ??
-        emulator.status().romId ??
-        settings.getRomId() ??
-        undefined;
-      const resolved = resolveRomStart(romId);
+      const romId = typeof body.romId === 'string' ? body.romId : undefined;
+      const resolved = resolveEmulatorStart(romId);
       if ('error' in resolved) {
         response.status(resolved.status).json({ error: resolved.error });
         return;

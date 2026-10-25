@@ -53,7 +53,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const roms = new RomStore(config.dataDir);
+  const roms = new RomStore(config.dataDir, logger);
   const settings = new SettingsStore(config.dataDir, logger);
   try {
     await roms.init();

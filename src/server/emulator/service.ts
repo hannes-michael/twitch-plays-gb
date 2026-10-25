@@ -52,6 +52,7 @@ export class EmulatorService {
   private readonly listeners = new Set<EmulatorStatusListener>();
   private controller: EmulatorController | null = null;
   private lifecycle = createStoppedEmulatorStatus();
+  private lastSuccessfulStart: EmulatorStartOptions | null = null;
   private operationQueue: Promise<void> = Promise.resolve();
   private closePromise: Promise<void> | null = null;
   private closing = false;
@@ -82,6 +83,11 @@ export class EmulatorService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /** Server-internal options for reusing the last successful explicit session. */
+  getLastStartOptions(): EmulatorStartOptions | null {
+    return this.lastSuccessfulStart ? { ...this.lastSuccessfulStart } : null;
   }
 
   start(options: EmulatorStartOptions): Promise<void> {
@@ -168,6 +174,11 @@ export class EmulatorService {
         romId,
         rom,
         audioSampleRate: AUDIO_TARGET_SAMPLE_RATE,
+      };
+      this.lastSuccessfulStart = {
+        romPath: options.romPath,
+        romId,
+        batterySavePath: options.batterySavePath,
       };
       this.logger.info(
         `emulator running: ${rom.title} (${rom.model}, ${rom.width}x${rom.height}) at ${controller.currentFps.toFixed(4)} fps`,

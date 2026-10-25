@@ -86,12 +86,14 @@ When no channel and ROM are saved yet, the UI shows the first-run wizard:
 
 Imports are validated on the server. `POST /api/roms` accepts raw
 `application/octet-stream` bytes with an `x-filename` header; the file must be
-`.gb`, `.gbc`, or `.gba` (case-insensitive), 1 byte–32 MiB, and have a valid
-Nintendo logo (GB/GBC) or fixed `0x96` header byte (GBA). Client filenames are
-only sanitized display names. Disk files are always
+`.gb`, `.gbc`, or `.gba` (case-insensitive), 32 KiB–32 MiB, and have a valid
+Nintendo logo for its platform (GB/GBC or GBA) plus the GBA fixed `0x96` header
+byte. Client filenames are only sanitized display names. Disk files are always
 `<dataDir>/roms/<sha256>.<extension>`, and identical bytes deduplicate. ROM
 metadata is persisted in `<dataDir>/roms.json`; `GET /api/roms` and
-`GET /api/roms/:id` never expose filesystem paths.
+`GET /api/roms/:id` never expose filesystem paths. Concurrent imports are
+serialized, and corrupt `settings.json` or `roms.json` files fall back to
+defaults with a warning instead of blocking server startup.
 
 **Finish setup** writes `<dataDir>/settings.json` and explicitly starts the
 selected ROM. The dashboard-lite exposes Start, Stop, Restart, an OBS overlay
@@ -105,6 +107,11 @@ reports `romId: null`.
 Battery-backed SRAM is flushed on stop to
 `<dataDir>/saves/<romId>.sav` when the cartridge has a battery. Autosave, save
 states, and restore are later P1 work.
+
+`--rom` sessions keep their last successful start options for Start and Restart
+requests without an explicit `romId`, so lifecycle controls never switch to the
+saved UI selection. A saved selection is only used when no `--rom` session has
+been started.
 
 `tests/fixtures/roms/` contains open-source homebrew ROMs for automated tests;
 they are not playable games. See `NOTICE.md` there for licenses.

@@ -9,12 +9,28 @@ import {
   type RomMetadata,
 } from '../../shared/roms';
 import { readJsonFile, writeJsonAtomic } from '../persistence';
+import type { Logger } from '../logger';
 
 const NINTENDO_LOGO = Buffer.from([
   0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d, 0x00, 0x0b, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0c, 0x00, 0x0d,
   0x00, 0x08, 0x11, 0x1f, 0x88, 0x89, 0x00, 0x0e, 0xdc, 0xcc, 0x6e, 0xe6, 0xdd, 0xdd, 0xd9, 0x99,
   0xbb, 0xbb, 0x67, 0x63, 0x6e, 0x0e, 0xec, 0xcc, 0xdd, 0xdc, 0x99, 0x9f, 0xbb, 0xb9, 0x33, 0x3e,
 ]);
+
+const GBA_NINTENDO_LOGO = Buffer.from([
+  0x24, 0xff, 0xae, 0x51, 0x69, 0x9a, 0xa2, 0x21, 0x3d, 0x84, 0x82, 0x0a, 0x84, 0xe4, 0x09, 0xad,
+  0x11, 0x24, 0x8b, 0x98, 0xc0, 0x81, 0x7f, 0x21, 0xa3, 0x52, 0xbe, 0x19, 0x93, 0x09, 0xce, 0x20,
+  0x10, 0x46, 0x4a, 0x4a, 0xf8, 0x27, 0x31, 0xec, 0x58, 0xc7, 0xe8, 0x33, 0x82, 0xe3, 0xce, 0xbf,
+  0x85, 0xf4, 0xdf, 0x94, 0xce, 0x4b, 0x09, 0xc1, 0x94, 0x56, 0x8a, 0xc0, 0x13, 0x72, 0xa7, 0xfc,
+  0x9f, 0x84, 0x4d, 0x73, 0xa3, 0xca, 0x9a, 0x61, 0x58, 0x97, 0xa3, 0x27, 0xfc, 0x03, 0x98, 0x76,
+  0x23, 0x1d, 0xc7, 0x61, 0x03, 0x04, 0xae, 0x56, 0xbf, 0x38, 0x84, 0x00, 0x40, 0xa7, 0x0e, 0xfd,
+  0xff, 0x52, 0xfe, 0x03, 0x6f, 0x95, 0x30, 0xf1, 0x97, 0xfb, 0xc0, 0x85, 0x60, 0xd6, 0x80, 0x25,
+  0xa9, 0x63, 0xbe, 0x03, 0x01, 0x4e, 0x38, 0xe2, 0xf9, 0xa2, 0x34, 0xff, 0xbb, 0x3e, 0x03, 0x44,
+  0x78, 0x00, 0x90, 0xcb, 0x88, 0x11, 0x3a, 0x94, 0x65, 0xc0, 0x7c, 0x63, 0x87, 0xf0, 0x3c, 0xaf,
+  0xd6, 0x25, 0xe4, 0x8b, 0x38, 0x0a, 0xac, 0x72, 0x21, 0xd4, 0xf8, 0x07,
+]);
+
+const MIN_ROM_BYTES = 32 * 1024;
 
 const ROM_EXTENSION_SET = new Set<string>(ROM_EXTENSIONS);
 const ROM_ID_PATTERN = /^[a-f0-9]{64}$/;
@@ -87,8 +103,8 @@ function readHeaderTitle(rom: Buffer, start: number, end: number): string {
 }
 
 function validateGbHeader(rom: Buffer, fallbackTitle: string): HeaderInfo {
-  if (rom.length < 0x150) {
-    throw new RomImportError('Invalid ROM: file is too small for a GB/GBC header');
+  if (rom.length < MIN_ROM_BYTES) {
+    throw new RomImportError('Invalid ROM: file is smaller than the 32 KiB minimum');
   }
 
   if (!rom.subarray(0x104, 0x134).equals(NINTENDO_LOGO)) {
@@ -111,8 +127,12 @@ function validateGbHeader(rom: Buffer, fallbackTitle: string): HeaderInfo {
 }
 
 function validateGbaHeader(rom: Buffer, fallbackTitle: string): HeaderInfo {
-  if (rom.length < 0xc0) {
-    throw new RomImportError('Invalid ROM: file is too small for a GBA header');
+  if (rom.length < MIN_ROM_BYTES) {
+    throw new RomImportError('Invalid ROM: file is smaller than the 32 KiB minimum');
+  }
+
+  if (!rom.subarray(0x04, 0xa0).equals(GBA_NINTENDO_LOGO)) {
+    throw new RomImportError('Invalid ROM: GBA Nintendo logo header is missing or corrupt');
   }
 
   if (rom[0xb2] !== 0x96) {
@@ -146,16 +166,29 @@ async function fileExists(path: string): Promise<boolean> {
 export class RomStore {
   private readonly romsDir: string;
   private readonly indexPath: string;
+  private readonly logger: Logger;
   private roms: RomMetadata[] = [];
+  private importQueue: Promise<void> = Promise.resolve();
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, logger: Logger) {
     this.romsDir = join(dataDir, 'roms');
     this.indexPath = join(dataDir, 'roms.json');
+    this.logger = logger;
   }
 
   async init(): Promise<void> {
     await mkdir(this.romsDir, { recursive: true });
-    const raw = await readJsonFile(this.indexPath);
+
+    let raw: unknown;
+    try {
+      raw = await readJsonFile(this.indexPath);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      this.logger.warn('ROM index is invalid; starting with an empty ROM library');
+      this.roms = [];
+      return;
+    }
+
     if (raw === undefined) {
       this.roms = [];
       return;
@@ -163,7 +196,9 @@ export class RomStore {
 
     const parsed = RomIndexSchema.safeParse(raw);
     if (!parsed.success) {
-      throw new Error('ROM index is corrupt or uses an unsupported version');
+      this.logger.warn('ROM index is invalid; starting with an empty ROM library');
+      this.roms = [];
+      return;
     }
 
     this.roms = parsed.data.roms;
@@ -184,7 +219,25 @@ export class RomStore {
     return rom ? join(this.romsDir, `${rom.id}${rom.extension}`) : null;
   }
 
-  async importRom(buffer: Buffer, originalFilename: string | undefined): Promise<RomImportResult> {
+  importRom(buffer: Buffer, originalFilename: string | undefined): Promise<RomImportResult> {
+    // Serializing the whole import (validation, dedupe check, write, index)
+    // prevents concurrent identical uploads from each observing an empty index.
+    return this.enqueueImport(() => this.importRomInternal(buffer, originalFilename));
+  }
+
+  private enqueueImport<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.importQueue.then(operation, operation);
+    this.importQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async importRomInternal(
+    buffer: Buffer,
+    originalFilename: string | undefined,
+  ): Promise<RomImportResult> {
     if (!originalFilename) {
       throw new RomImportError('Missing x-filename header');
     }
