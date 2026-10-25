@@ -58,6 +58,7 @@ export class InputService {
   private paused = false;
   private lastExecuted: InputState['lastExecuted'] = null;
   private lastDrop: InputState['lastDrop'] = null;
+  private lastMeta: InputState['lastMeta'] = null;
   private closed = false;
   private processing = false;
   private processScheduled = false;
@@ -87,6 +88,7 @@ export class InputService {
       stats: { ...this.stats },
       lastExecuted: this.lastExecuted ? { ...this.lastExecuted } : null,
       lastDrop: this.lastDrop ? { ...this.lastDrop } : null,
+      lastMeta: this.lastMeta ? { ...this.lastMeta } : null,
     };
   }
 
@@ -114,12 +116,38 @@ export class InputService {
     if (!parsed) return;
 
     if (parsed.kind === 'meta') {
-      // Mode switching, pause/resume, and save are P1-29/P1-30 work.
+      if (parsed.command === 'save') {
+        this.handleSaveCommand(message);
+        return;
+      }
+      // Mode switching and pause/resume are later P1 work.
       this.logger.debug(`ignoring meta chat command: ${parsed.command}`);
       return;
     }
 
     this.accept(message, parsed.button);
+  }
+
+  private handleSaveCommand(message: ChatMessage): void {
+    const allowed = Boolean(message.roles?.broadcaster || message.roles?.mod);
+    this.lastMeta = {
+      command: 'save',
+      user: message.user,
+      allowed,
+      at: new Date().toISOString(),
+    };
+    this.publish();
+
+    if (!allowed) {
+      this.logger.debug(`ignoring unauthorized save command from ${message.user}`);
+      return;
+    }
+
+    void this.emulator.saveState('command').catch((error: unknown) => {
+      this.logger.warn(
+        `save command failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   private accept(message: ChatMessage, button: InputButton): void {

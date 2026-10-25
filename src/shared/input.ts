@@ -62,6 +62,15 @@ export interface InputLastDrop {
   at: string;
 }
 
+export type InputMetaCommand = 'mode' | 'pause' | 'resume' | 'save';
+
+export interface InputLastMeta {
+  command: InputMetaCommand;
+  user: string;
+  allowed: boolean;
+  at: string;
+}
+
 export interface InputState {
   mode: InputMode;
   paused: boolean;
@@ -70,6 +79,7 @@ export interface InputState {
   stats: InputStats;
   lastExecuted: InputLastExecuted | null;
   lastDrop: InputLastDrop | null;
+  lastMeta: InputLastMeta | null;
 }
 
 export interface InputStateMessage {
