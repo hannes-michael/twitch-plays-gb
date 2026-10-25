@@ -1,15 +1,23 @@
+import { once } from 'node:events';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { APIRequestContext } from '@playwright/test';
-import { expect, test } from '../../fixtures/server';
+import WebSocket from 'ws';
+import { ChatService } from '../../../src/server/chat/service';
+import type { ChatSource } from '../../../src/server/chat/types';
+import { isTwitchBot } from '../../../src/server/chat/twitch-source';
+import type { Logger } from '../../../src/server/logger';
+import { expect, startServer, test } from '../../fixtures/server';
 
 const romDir = fileURLToPath(new URL('../../fixtures/roms/', import.meta.url));
 
+const INPUT_STALE_MS = 1_500;
+
 const inputTimings: NodeJS.ProcessEnv = {
-  TPG_INPUT_COOLDOWN_MS: '100',
+  TPG_INPUT_COOLDOWN_MS: '300',
   TPG_INPUT_MAX_QUEUE: '2',
   TPG_INPUT_MAX_PER_SECOND: '2',
-  TPG_INPUT_STALE_MS: '500',
+  TPG_INPUT_STALE_MS: String(INPUT_STALE_MS),
   TPG_HOLD_FRAMES: '2',
   TPG_RELEASE_FRAMES: '1',
 };
@@ -108,6 +116,154 @@ async function waitForRateWindow(request: APIRequestContext, baseURL: string): P
     )
     .toBe(true);
 }
+
+const noopLogger: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
+class ControlledTwitchSource implements ChatSource {
+  readonly kind = 'twitch' as const;
+  connected = false;
+  started = false;
+  stopped = false;
+
+  constructor(readonly channel: string) {}
+
+  async start(): Promise<void> {
+    this.started = true;
+    this.connected = true;
+    // Yield once so an overlapping transition can supersede this start before
+    // the operation checks its generation again.
+    await Promise.resolve();
+  }
+
+  stop(): void {
+    this.connected = false;
+    this.stopped = true;
+  }
+}
+
+test.describe('chat source safeguards', () => {
+  test('maps Twitch bot badges and known bot usernames', () => {
+    expect(isTwitchBot('viewer', new Map([['bot-badge', '1']]))).toBe(true);
+    expect(isTwitchBot('viewer', new Map([['twitchbot', '1']]))).toBe(true);
+    expect(isTwitchBot('nightbot', new Map([['subscriber', '12']]))).toBe(true);
+    expect(isTwitchBot('viewer', new Map([['subscriber', '12']]))).toBe(false);
+    expect(isTwitchBot('viewer', new Map(), 'bot')).toBe(true);
+  });
+
+  test('serializes overlapping Twitch source transitions', async () => {
+    const immediateSources: ControlledTwitchSource[] = [];
+    const immediate = new ChatService(noopLogger, {
+      createTwitchSource: (channel) => {
+        const source = new ControlledTwitchSource(channel);
+        immediateSources.push(source);
+        return source;
+      },
+    });
+
+    try {
+      // Both calls overlap before the first transition can assign a source.
+      const first = immediate.startTwitch('first');
+      const second = immediate.startTwitch('second');
+      await Promise.all([first, second]);
+
+      expect(immediateSources.filter((source) => source.connected)).toHaveLength(1);
+      expect(immediateSources.at(-1)?.channel).toBe('second');
+      expect(immediateSources.slice(0, -1).every((source) => source.stopped)).toBe(true);
+    } finally {
+      await immediate.close();
+    }
+
+    const sources: ControlledTwitchSource[] = [];
+    let firstCreated!: () => void;
+    const firstSourceCreated = new Promise<void>((resolve) => {
+      firstCreated = resolve;
+    });
+
+    const chat = new ChatService(noopLogger, {
+      createTwitchSource: (channel) => {
+        const source = new ControlledTwitchSource(channel);
+        sources.push(source);
+        if (channel === 'first') firstCreated();
+        return source;
+      },
+    });
+
+    try {
+      // The second call lands while the first source is still starting.
+      const first = chat.startTwitch('first');
+      await firstSourceCreated;
+      const second = chat.startTwitch('second');
+      await Promise.all([first, second]);
+
+      expect(sources).toHaveLength(2);
+      expect(sources[0]).toMatchObject({ channel: 'first', connected: false, stopped: true });
+      expect(sources[1]).toMatchObject({ channel: 'second', connected: true, stopped: false });
+      expect(chat.getStatus()).toMatchObject({
+        source: 'twitch',
+        connected: true,
+        channel: 'second',
+      });
+      expect(sources.filter((source) => source.connected)).toHaveLength(1);
+    } finally {
+      await chat.close();
+    }
+
+    expect(sources[1].stopped).toBe(true);
+  });
+
+  test('coalesces bursty input-state broadcasts to at most 10 Hz', async () => {
+    const server = await startServer({
+      env: {
+        TPG_INPUT_COOLDOWN_MS: '0',
+        TPG_INPUT_MAX_QUEUE: '2',
+        TPG_INPUT_MAX_PER_SECOND: '100',
+      },
+    });
+    const socket = new WebSocket(`${server.baseURL.replace(/^http/, 'ws')}/ws`);
+    const states: InputSnapshot[] = [];
+    socket.on('message', (data) => {
+      try {
+        const message = JSON.parse(data.toString()) as { type?: string; input?: InputSnapshot };
+        if (message.type === 'input-state' && message.input) states.push(message.input);
+      } catch {
+        // Ignore non-JSON frames; this scenario counts only input-state messages.
+      }
+    });
+
+    try {
+      await once(socket, 'open');
+      await expect.poll(() => states.length).toBeGreaterThan(0);
+      states.length = 0;
+
+      const startedAt = Date.now();
+      for (let index = 0; index < 20; index += 1) {
+        const response = await fetch(`${server.baseURL}/api/test/chat`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ user: `spam-${index}`, text: '!up' }),
+        });
+        expect(response.status, await response.text()).toBe(201);
+      }
+
+      await expect
+        .poll(() => states.at(-1)?.stats.queueFullDrops ?? 0, { timeout: 5_000 })
+        .toBeGreaterThanOrEqual(18);
+      const elapsedMs = Date.now() - startedAt;
+      const final = states.at(-1);
+      expect(final?.queue).toHaveLength(2);
+      expect(final?.stats).toMatchObject({ accepted: 2, queueFullDrops: 18 });
+      expect(states.length).toBeLessThanOrEqual(Math.ceil(elapsedMs / 100) + 2);
+    } finally {
+      socket.close();
+      await server.stop();
+    }
+  });
+});
 
 test.describe('chat input', () => {
   test('executes anarchy input, drops cooldown, rate, and overflow, then drains the queue', async ({
@@ -249,6 +405,61 @@ test.describe('chat input', () => {
     await expect(app.page.getByTestId('overlay-recent-inputs')).toContainText('alice');
     await expect(app.page.getByTestId('overlay-recent-inputs')).toContainText('RIGHT');
     await expect(app.page.getByTestId('overlay-recent-inputs')).toContainText('queue-full');
+
+    // Stale: a queued input that sits past the stale limit while stopped is
+    // dropped at execution instead of being pressed late.
+    await waitForRateWindow(app.request, app.baseURL);
+    const beforeStale = await readInput(app.request, app.baseURL);
+    const staleStop = await app.request.post(`${app.baseURL}/api/emulator/stop`);
+    expect(staleStop.status(), await staleStop.text()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await getJson<EmulatorSnapshot>(app.request, `${app.baseURL}/api/emulator/status`))
+            .status,
+        { timeout: 20_000 },
+      )
+      .toBe('stopped');
+
+    await injectChat(app.request, app.baseURL, 'grace', '!select');
+    await expect
+      .poll(
+        async () => {
+          const state = await readInput(app.request, app.baseURL);
+          const event = state.queue.find((entry) => entry.user === 'grace');
+          return event ? Date.now() - Date.parse(event.queuedAt) : 0;
+        },
+        { timeout: 5_000, intervals: [50] },
+      )
+      .toBeGreaterThan(INPUT_STALE_MS);
+
+    const staleStart = await app.request.post(`${app.baseURL}/api/emulator/start`);
+    expect(staleStart.status(), await staleStart.text()).toBe(200);
+    await expect
+      .poll(
+        async () =>
+          (await getJson<EmulatorSnapshot>(app.request, `${app.baseURL}/api/emulator/status`))
+            .status,
+        { timeout: 20_000 },
+      )
+      .toBe('running');
+    await expect
+      .poll(async () => (await readInput(app.request, app.baseURL)).stats.staleDrops)
+      .toBeGreaterThan(beforeStale.stats.staleDrops);
+    await expect
+      .poll(async () => (await readInput(app.request, app.baseURL)).lastDrop?.reason)
+      .toBe('stale');
+
+    const afterStale = await readInput(app.request, app.baseURL);
+    expect(afterStale.stats.executed).toBe(beforeStale.stats.executed);
+    expect(afterStale.lastExecuted).toEqual(beforeStale.lastExecuted);
+    expect(afterStale.queue).toHaveLength(0);
+    expect(afterStale.recent.at(-1)).toMatchObject({
+      user: 'grace',
+      button: 'SELECT',
+      status: 'dropped',
+      dropReason: 'stale',
+    });
 
     expect(pageErrors, 'page errors').toEqual([]);
   });
