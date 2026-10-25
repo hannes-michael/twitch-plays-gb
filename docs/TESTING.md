@@ -123,9 +123,11 @@ await expect(page.getByTestId('server-status-label')).toHaveText('online');
 
 `server-child.electron.spec.ts` builds web, server, and desktop in `beforeAll`,
 launches Electron with **no** `TPG_SERVER_URL`, and proves the shell spawned
-`dist/server/index.js` through Electron-as-Node. It checks the setup screen,
-same-origin `/api/emulator/status` and `/health`, GB model/dimensions, growing
-video/audio counters, and that the child PID exits after `app.close()`.
+`dist/server/index.js` through Electron-as-Node. It passes a repo-relative
+`TPG_ROM` and asserts the resolved absolute path in the desktop log, then checks
+the setup screen, same-origin `/api/emulator/status` and `/health`, GB
+model/dimensions, growing video/audio counters, and that the child PID exits
+after `app.close()`.
 `capture-window.electron.spec.ts` uses the external server fixture with
 `TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
 the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,

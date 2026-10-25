@@ -49,9 +49,14 @@ not share a fixed HMR port.
 ## Booting a ROM
 
 Pass a `.gb`, `.gbc`, or `.gba` file through normal configuration to boot the
-emulator when the server starts. The path can be relative to the current
-directory; the server stores it as an absolute path. Missing files and other
-extensions are configuration errors.
+emulator when the server starts. The server stores it as an absolute path.
+Missing files and other extensions are configuration errors.
+
+When the desktop shell spawns its own server, it resolves a relative `TPG_ROM`
+against the desktop process working directory first, then against the data
+directory, and passes an absolute `--rom` to the child. Absolute paths are
+unchanged. The standalone server (`npm start` or `npm run dev:web`) resolves
+relative paths against its own working directory.
 
 ```bash
 # One-command dev (env var; `npm run dev` forwards args to Electron)
@@ -120,6 +125,12 @@ escalates to SIGKILL if the child does not exit within 5 seconds. Use
 `TPG_DATA_DIR` to isolate its data directory and `TPG_ROM` to boot a ROM. The
 one-command dev workflow still runs an external server and points Electron at it
 with `TPG_SERVER_URL`, so it does not use the spawn path.
+
+Packaged apps ignore inherited `TPG_DEV`, `TPG_TEST`, and `TPG_SERVER_ENTRY`.
+The child always runs with `TPG_DEV=0`, `TPG_TEST=0`, and the unpacked server
+entry; it serves built assets rather than mounting Vite. `TPG_DATA_DIR` still
+wins when explicitly set; otherwise packaged apps use Electron's `userData`
+directory.
 
 Packaging is still P0-28. The electron-builder config now unpacks `dist/**`,
 `package.json`, and runtime `node_modules/**` so the spawned server entry can

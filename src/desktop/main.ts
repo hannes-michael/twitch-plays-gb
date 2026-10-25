@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron';
 
@@ -144,8 +144,13 @@ function stopServerChild(): Promise<void> {
 }
 
 function resolveServerEntry(): string {
-  const override = process.env.TPG_SERVER_ENTRY?.trim();
-  if (override) return resolve(override);
+  // The entry override is a development/CI escape hatch. A packaged app must
+  // always use its own unpacked bundle, never a path inherited from the
+  // environment.
+  if (!app.isPackaged) {
+    const override = process.env.TPG_SERVER_ENTRY?.trim();
+    if (override) return resolve(override);
+  }
 
   if (app.isPackaged) {
     const unpacked = join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'server', 'index.js');
@@ -159,11 +164,31 @@ function resolveDataDir(): string {
   const override = process.env.TPG_DATA_DIR?.trim();
   if (override) return resolve(override);
 
-  if (flagEnabled(process.env.TPG_DEV)) {
+  // TPG_DEV is a development flag. Packaged apps always use Electron's real
+  // userData directory, even if the environment inherited TPG_DEV=1.
+  if (!app.isPackaged && flagEnabled(process.env.TPG_DEV)) {
     return join(app.getAppPath(), 'data', 'dev');
   }
 
   return app.getPath('userData');
+}
+
+/**
+ * The server child runs with its working directory set to the server bundle,
+ * so a relative ROM from the shell's environment must be resolved first.
+ * Try the desktop process working directory, then the app data directory.
+ * Absolute paths are passed through unchanged.
+ */
+function resolveRomPath(rom: string, dataDir: string): string {
+  if (isAbsolute(rom)) return rom;
+
+  const cwdCandidate = resolve(process.cwd(), rom);
+  if (existsSync(cwdCandidate)) return cwdCandidate;
+
+  const dataCandidate = resolve(dataDir, rom);
+  if (existsSync(dataCandidate)) return dataCandidate;
+
+  return cwdCandidate;
 }
 
 function createChildEnv(dataDir: string): NodeJS.ProcessEnv {
@@ -185,12 +210,16 @@ function createChildEnv(dataDir: string): NodeJS.ProcessEnv {
 
   env.ELECTRON_RUN_AS_NODE = '1';
   env.TPG_DATA_DIR = dataDir;
+  // The spawned server always serves the built assets. TPG_DEV must never
+  // enable Vite middleware here, and packaged apps must never enter test mode
+  // just because the environment inherited those flags.
+  env.TPG_DEV = '0';
+  env.TPG_TEST = app.isPackaged ? '0' : (process.env.TPG_TEST ?? '0');
 
   // Only forward app configuration that the child understands. In particular,
-  // never forward a stale TPG_SERVER_URL or the desktop-only capture flag.
-  if (process.env.TPG_TEST !== undefined) env.TPG_TEST = process.env.TPG_TEST;
+  // never forward a stale TPG_SERVER_URL, TPG_SERVER_ENTRY, TPG_CAPTURE, or the
+  // raw TPG_ROM (the resolved absolute ROM is passed as --rom instead).
   if (process.env.TPG_LOG_LEVEL !== undefined) env.TPG_LOG_LEVEL = process.env.TPG_LOG_LEVEL;
-  if (process.env.TPG_ROM !== undefined) env.TPG_ROM = process.env.TPG_ROM;
 
   return env;
 }
@@ -302,7 +331,8 @@ async function startServerChild(): Promise<{ child: ChildProcess; url: URL }> {
   }
 
   const dataDir = resolveDataDir();
-  const rom = process.env.TPG_ROM?.trim();
+  const rawRom = process.env.TPG_ROM?.trim();
+  const rom = rawRom ? resolveRomPath(rawRom, dataDir) : undefined;
   const args = [
     serverEntry,
     '--host',
@@ -345,6 +375,9 @@ async function startServerChild(): Promise<{ child: ChildProcess; url: URL }> {
   process.stdout.write(
     `[desktop] server child ready at ${url.origin} (pid ${child.pid ?? 'unknown'})\n`,
   );
+  if (rom) {
+    process.stdout.write(`[desktop] ROM: ${rom}\n`);
+  }
   return { child, url };
 }
 

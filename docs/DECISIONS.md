@@ -91,6 +91,14 @@ a packaged smoke test. Packaging must leave Electron's `RunAsNode` fuse enabled
 (the default); disabling it would prevent `ELECTRON_RUN_AS_NODE=1` from starting
 the server child.
 
+Packaged mode ignores inherited `TPG_DEV`, `TPG_TEST`, and `TPG_SERVER_ENTRY`.
+The child always gets `TPG_DEV=0` and `TPG_TEST=0`, so it serves built assets
+instead of mounting Vite. `TPG_DATA_DIR` still wins when explicit; otherwise
+packaged apps use Electron's `userData` directory. A relative `TPG_ROM` is
+resolved in the desktop main process against the process working directory and
+then the data directory before spawning; the child only receives an absolute
+`--rom` path.
+
 ## ADR-007: Capture window reuses the overlay with a stable OBS title
 
 **Status:** accepted (P0-26; OBS manual verification pending)
