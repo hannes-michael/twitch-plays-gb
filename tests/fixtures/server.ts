@@ -26,6 +26,13 @@ export interface StartServerOptions {
   shutdownTimeoutMs?: number;
 }
 
+export interface ServerFixture {
+  baseURL: string;
+  dataDir: string;
+  request: APIRequestContext;
+  getLogs(): string;
+}
+
 export interface AppFixture {
   baseURL: string;
   page: Page;
@@ -33,6 +40,7 @@ export interface AppFixture {
 }
 
 type Fixtures = {
+  server: ServerFixture;
   app: AppFixture;
 };
 
@@ -348,43 +356,38 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 }
 
 export const test = base.extend<Fixtures>({
-  app: async ({ page }, use, testInfo) => {
+  server: async ({ playwright }, use, testInfo) => {
     const server = await startServer();
+    const request = await playwright.request.newContext({ baseURL: server.baseURL });
     let failure: unknown;
 
     try {
-      let response;
-      try {
-        response = await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(
-          `Failed to load the app at ${server.baseURL}: ${message}\n${server.getLogs()}`,
-          { cause: error },
-        );
-      }
-
-      if (!response || !response.ok()) {
-        throw new Error(
-          `App returned HTTP ${response?.status() ?? 'no response'} at ${server.baseURL}.\n${server.getLogs()}`,
-        );
-      }
-
-      await use({ baseURL: server.baseURL, page, request: page.request });
+      await use({
+        baseURL: server.baseURL,
+        dataDir: server.dataDir,
+        getLogs: server.getLogs,
+        request,
+      });
     } catch (error) {
       failure = error;
     }
 
-    let stopError: unknown;
+    let teardownError: unknown;
+    try {
+      await request.dispose();
+    } catch (error) {
+      teardownError = error;
+    }
+
     try {
       await server.stop();
     } catch (error) {
-      stopError = error;
+      teardownError ??= error;
     }
 
     if (
       failure !== undefined ||
-      stopError !== undefined ||
+      teardownError !== undefined ||
       testInfo.status !== testInfo.expectedStatus
     ) {
       await testInfo.attach('server-logs', {
@@ -393,16 +396,41 @@ export const test = base.extend<Fixtures>({
       });
     }
 
-    if (stopError !== undefined) {
+    if (teardownError !== undefined) {
       await testInfo.attach('fixture-teardown-error', {
         body:
-          stopError instanceof Error ? (stopError.stack ?? stopError.message) : String(stopError),
+          teardownError instanceof Error
+            ? (teardownError.stack ?? teardownError.message)
+            : String(teardownError),
         contentType: 'text/plain',
       });
     }
 
     if (failure !== undefined) throw failure;
-    if (stopError !== undefined) throw stopError;
+    if (teardownError !== undefined) throw teardownError;
+  },
+
+  app: async ({ page, server }, use) => {
+    let response;
+    try {
+      response = await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to load the app at ${server.baseURL}: ${message}\n${server.getLogs()}`,
+        {
+          cause: error,
+        },
+      );
+    }
+
+    if (!response || !response.ok()) {
+      throw new Error(
+        `App returned HTTP ${response?.status() ?? 'no response'} at ${server.baseURL}.\n${server.getLogs()}`,
+      );
+    }
+
+    await use({ baseURL: server.baseURL, page, request: server.request });
   },
 });
 
