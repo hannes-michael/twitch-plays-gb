@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -19,6 +19,7 @@ const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 const LOG_TAIL_LINES = 200;
 const LOG_TAIL_CHARS = 20_000;
 const SELF_TEST_STATUS_TIMEOUT_MS = 30_000;
+const SELF_TEST_GROWTH_TIMEOUT_MS = 5_000;
 const SELF_TEST_POLL_INTERVAL_MS = 100;
 const SELF_TEST_REQUEST_TIMEOUT_MS = 5_000;
 
@@ -188,6 +189,30 @@ interface SelfTestPage {
   body: string;
 }
 
+type SelfTestAssetKind = 'script' | 'stylesheet' | 'modulepreload';
+
+interface SelfTestAsset {
+  url: string;
+  kind: SelfTestAssetKind;
+}
+
+interface SelfTestResult {
+  status: 'ok' | 'fail';
+  packaged: number;
+  rom: number;
+  model: string;
+  size: string;
+  frames: number;
+  audio: number;
+  sampleRate: number;
+  pid: number;
+  reason: string | null;
+}
+
+let selfTestPid: number | undefined;
+let selfTestRomRequested = false;
+let selfTestLastStatus: SelfTestEmulatorStatus | undefined;
+
 function prepareSelfTestDataDir(): string {
   const override = process.env.TPG_DATA_DIR?.trim();
   if (override) {
@@ -214,11 +239,79 @@ function cleanupSelfTestDataDir(): void {
 
 function writeSelfTestLine(stream: NodeJS.WriteStream, line: string): Promise<void> {
   return new Promise((resolveWrite) => {
-    stream.write(line.endsWith('\n') ? line : `${line}\n`, () => resolveWrite());
+    let settled = false;
+
+    function finish(): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveWrite();
+    }
+
+    // The NSIS portable wrapper does not always inherit stdout. Never let a
+    // closed or blocked stream prevent the result file/app.exit path.
+    const timer = setTimeout(finish, 1_000);
+    try {
+      stream.write(line.endsWith('\n') ? line : `${line}\n`, finish);
+    } catch {
+      finish();
+    }
   });
 }
 
-async function finishSelfTest(code: number, line: string, details?: string): Promise<void> {
+function buildSelfTestResult(status: 'ok' | 'fail', reason?: string): SelfTestResult {
+  const rom = selfTestLastStatus?.rom;
+  return {
+    status,
+    packaged: app.isPackaged ? 1 : 0,
+    rom: selfTestRomRequested ? 1 : 0,
+    model: rom?.model ?? 'none',
+    size: rom && rom.width && rom.height ? `${rom.width}x${rom.height}` : 'none',
+    frames: selfTestLastStatus?.videoFrames ?? 0,
+    audio: selfTestLastStatus?.audioChunks ?? 0,
+    sampleRate: selfTestLastStatus?.audioSampleRate ?? 0,
+    pid: selfTestPid ?? 0,
+    reason: reason ?? null,
+  };
+}
+
+function formatSelfTestSuccessLine(result: SelfTestResult): string {
+  return [
+    'TPG_SELF_TEST_OK',
+    `packaged=${result.packaged}`,
+    `rom=${result.rom}`,
+    `model=${result.model}`,
+    `size=${result.size}`,
+    `frames=${result.frames}`,
+    `audio=${result.audio}`,
+    `sampleRate=${result.sampleRate}`,
+    `pid=${result.pid}`,
+  ].join(' ');
+}
+
+function writeSelfTestResultFile(result: SelfTestResult): void {
+  const rawPath = process.env.TPG_SELF_TEST_RESULT?.trim();
+  if (!rawPath) return;
+
+  const target = isAbsolute(rawPath) ? rawPath : resolve(rawPath);
+  const tempPath = `${target}.tmp-${process.pid}`;
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(tempPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+
+  try {
+    renameSync(tempPath, target);
+  } catch {
+    rmSync(target, { force: true });
+    renameSync(tempPath, target);
+  }
+}
+
+async function finishSelfTest(
+  code: number,
+  line: string,
+  details?: string,
+  result?: SelfTestResult,
+): Promise<void> {
   if (selfTestFinishing) return;
   selfTestFinishing = true;
 
@@ -229,28 +322,52 @@ async function finishSelfTest(code: number, line: string, details?: string): Pro
     stopError = error;
   }
 
+  let finalResult =
+    result ??
+    buildSelfTestResult(code === 0 ? 'ok' : 'fail', stopError ? 'server-stop-failed' : undefined);
+
   if (stopError !== undefined) {
     code = 1;
     line = 'TPG_SELF_TEST_FAIL reason=server-stop-failed';
     details =
       `${details ? `${details}\n` : ''}` +
       `Failed to stop the server child: ${stopError instanceof Error ? stopError.message : String(stopError)}`;
+    finalResult = { ...finalResult, status: 'fail', reason: 'server-stop-failed' };
   }
 
   cleanupSelfTestDataDir();
 
-  const stream = code === 0 ? process.stdout : process.stderr;
-  await writeSelfTestLine(stream, line);
-  if (details) await writeSelfTestLine(stream, details);
+  try {
+    writeSelfTestResultFile(finalResult);
+  } catch (error) {
+    code = 1;
+    line = 'TPG_SELF_TEST_FAIL reason=result-file-write-failed';
+    details =
+      `Could not write TPG_SELF_TEST_RESULT: ` +
+      `${error instanceof Error ? error.message : String(error)}`;
+  }
 
-  app.exit(code);
+  try {
+    const stream = code === 0 ? process.stdout : process.stderr;
+    await writeSelfTestLine(stream, line);
+    if (details) await writeSelfTestLine(stream, details);
+  } catch {
+    // The result file is the machine-readable channel for wrappers without stdout.
+  } finally {
+    app.exit(code);
+  }
 }
 
 function failSelfTest(reason: string, message: string): Promise<void> {
   const details = message.includes('Last server output:')
     ? message
     : `${message}\n${formatLogTail()}`;
-  return finishSelfTest(1, `TPG_SELF_TEST_FAIL reason=${reason}`, details);
+  return finishSelfTest(
+    1,
+    `TPG_SELF_TEST_FAIL reason=${reason}`,
+    details,
+    buildSelfTestResult('fail', reason),
+  );
 }
 
 async function fetchSelfTestPage(url: URL, accept: string): Promise<SelfTestPage> {
@@ -283,6 +400,117 @@ function validatePackagedHtml(name: string, page: SelfTestPage): string | undefi
   return undefined;
 }
 
+function readHtmlAttribute(tag: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function extractHtmlAssets(html: string): SelfTestAsset[] {
+  const assets = new Map<string, SelfTestAssetKind>();
+  const tagPattern = /<(script|link)\b[^>]*>/gi;
+
+  for (const match of html.matchAll(tagPattern)) {
+    const tag = match[0];
+    const tagName = match[1].toLowerCase();
+
+    if (tagName === 'script') {
+      const src = readHtmlAttribute(tag, 'src');
+      if (src) assets.set(src, 'script');
+      continue;
+    }
+
+    const rel = readHtmlAttribute(tag, 'rel')?.trim().toLowerCase();
+    const href = readHtmlAttribute(tag, 'href');
+    if (!href) continue;
+    if (rel === 'stylesheet') assets.set(href, 'stylesheet');
+    else if (rel === 'modulepreload') assets.set(href, 'modulepreload');
+  }
+
+  return [...assets].map(([url, kind]) => ({ url, kind }));
+}
+
+async function validatePackagedAssets(
+  pageName: string,
+  pageUrl: URL,
+  page: SelfTestPage,
+): Promise<void> {
+  const assets = extractHtmlAssets(page.body);
+  const kinds = new Set(assets.map((asset) => asset.kind));
+
+  if (!kinds.has('script')) {
+    throw new SelfTestFailure('asset-missing', `${pageName} did not reference a script asset.`);
+  }
+  if (!kinds.has('stylesheet')) {
+    throw new SelfTestFailure('asset-missing', `${pageName} did not reference a stylesheet asset.`);
+  }
+
+  for (const asset of assets) {
+    let assetUrl: URL;
+    try {
+      assetUrl = new URL(asset.url, pageUrl);
+    } catch {
+      throw new SelfTestFailure(
+        'asset-url',
+        `${pageName} referenced an invalid ${asset.kind} URL: ${JSON.stringify(asset.url)}.`,
+      );
+    }
+
+    if (assetUrl.origin !== pageUrl.origin) {
+      throw new SelfTestFailure(
+        'asset-origin',
+        `${pageName} referenced a cross-origin ${asset.kind}: ${assetUrl.toString()}.`,
+      );
+    }
+
+    const response = await fetch(assetUrl, {
+      headers: {
+        accept: asset.kind === 'stylesheet' ? 'text/css,*/*;q=0.1' : 'text/javascript,*/*;q=0.1',
+      },
+      signal: AbortSignal.timeout(SELF_TEST_REQUEST_TIMEOUT_MS),
+    });
+    const body = await response.text();
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
+
+    if (response.status !== 200) {
+      throw new SelfTestFailure(
+        'asset-fetch',
+        `${pageName} ${asset.kind} ${assetUrl.pathname} returned HTTP ${response.status}.`,
+      );
+    }
+
+    const expectedType = asset.kind === 'stylesheet' ? 'text/css' : 'javascript';
+    if (!contentType.includes(expectedType)) {
+      throw new SelfTestFailure(
+        'asset-content-type',
+        `${pageName} ${asset.kind} ${assetUrl.pathname} returned content-type ` +
+          `${JSON.stringify(contentType)}.`,
+      );
+    }
+
+    if (body.trim().length === 0) {
+      throw new SelfTestFailure(
+        'asset-empty',
+        `${pageName} ${asset.kind} ${assetUrl.pathname} returned an empty body.`,
+      );
+    }
+  }
+}
+
+async function validateMissingAsset(pageUrl: URL): Promise<void> {
+  const missingUrl = new URL('/assets/__tpg_self_test_missing__.js', pageUrl);
+  const response = await fetch(missingUrl, {
+    signal: AbortSignal.timeout(SELF_TEST_REQUEST_TIMEOUT_MS),
+  });
+  await response.text();
+
+  if (response.status !== 404) {
+    throw new SelfTestFailure(
+      'missing-asset-fallback',
+      `A missing packaged asset returned HTTP ${response.status} instead of 404.`,
+    );
+  }
+}
+
 async function fetchSelfTestJson<T>(url: URL): Promise<T> {
   const response = await fetch(url, {
     headers: { accept: 'application/json' },
@@ -294,11 +522,13 @@ async function fetchSelfTestJson<T>(url: URL): Promise<T> {
 
 async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
   const statusUrl = new URL('/api/emulator/status', url);
-  const deadline = Date.now() + SELF_TEST_STATUS_TIMEOUT_MS;
+  const startupDeadline = Date.now() + SELF_TEST_STATUS_TIMEOUT_MS;
+  let growthDeadline: number | undefined;
+  let firstStatus: SelfTestEmulatorStatus | undefined;
   let lastStatus: SelfTestEmulatorStatus | undefined;
   let lastError = 'no response yet';
 
-  while (Date.now() < deadline) {
+  while (Date.now() < (growthDeadline ?? startupDeadline)) {
     let status: SelfTestEmulatorStatus;
 
     try {
@@ -310,6 +540,8 @@ async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
     }
 
     lastStatus = status;
+    selfTestLastStatus = status;
+
     if (status.status === 'error') {
       throw new SelfTestFailure(
         'emulator-error',
@@ -317,14 +549,23 @@ async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
       );
     }
 
-    if (
+    const runningWithMedia =
       status.status === 'running' &&
       typeof status.videoFrames === 'number' &&
       status.videoFrames > 0 &&
       typeof status.audioChunks === 'number' &&
-      status.audioChunks > 0
-    ) {
-      return status;
+      status.audioChunks > 0;
+
+    if (runningWithMedia) {
+      if (!firstStatus) {
+        firstStatus = status;
+        growthDeadline = Date.now() + SELF_TEST_GROWTH_TIMEOUT_MS;
+      } else if (
+        (status.videoFrames ?? 0) > (firstStatus.videoFrames ?? 0) &&
+        (status.audioChunks ?? 0) > (firstStatus.audioChunks ?? 0)
+      ) {
+        return status;
+      }
     }
 
     lastError =
@@ -336,6 +577,16 @@ async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
   const romDetail = lastStatus?.rom
     ? ` Last ROM status: ${lastStatus.rom.model ?? 'unknown'} ${lastStatus.rom.width}x${lastStatus.rom.height}.`
     : '';
+
+  if (firstStatus) {
+    throw new SelfTestFailure(
+      'emulator-not-growing',
+      `Emulator counters did not grow within ${SELF_TEST_GROWTH_TIMEOUT_MS}ms ` +
+        `(first: frames ${firstStatus.videoFrames ?? 0}, audio ${firstStatus.audioChunks ?? 0}; ` +
+        `last: ${lastError}).${romDetail}`,
+    );
+  }
+
   throw new SelfTestFailure(
     'emulator-timeout',
     `Emulator did not become running with video and audio within ` +
@@ -344,13 +595,14 @@ async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
 }
 
 async function runSelfTest(): Promise<void> {
-  const romRequested = Boolean(process.env.TPG_ROM?.trim());
+  selfTestRomRequested = Boolean(process.env.TPG_ROM?.trim());
 
   try {
     let started: { child: ChildProcess; url: URL; serverEntry: string };
     try {
       started = await startServerChild();
     } catch (error) {
+      selfTestPid = serverChild?.pid;
       throw new SelfTestFailure(
         'server-start-failed',
         error instanceof Error ? error.message : String(error),
@@ -362,6 +614,7 @@ async function runSelfTest(): Promise<void> {
     if (typeof child.pid !== 'number' || child.pid <= 0) {
       throw new SelfTestFailure('server-pid', 'The server child did not report a real PID.');
     }
+    selfTestPid = child.pid;
 
     const health = await fetchSelfTestJson<{ status?: string }>(new URL('/health', url));
     if (health.status !== 'ok') {
@@ -374,6 +627,10 @@ async function runSelfTest(): Promise<void> {
     if (rootProblem) throw new SelfTestFailure('root-html', rootProblem);
     const overlayProblem = validatePackagedHtml('GET /overlay?client=obs', overlayPage);
     if (overlayProblem) throw new SelfTestFailure('overlay-html', overlayProblem);
+
+    await validatePackagedAssets('GET /', url, rootPage);
+    await validatePackagedAssets('GET /overlay?client=obs', url, overlayPage);
+    await validateMissingAsset(url);
 
     if (app.isPackaged && serverLogs.some((line) => line.includes('mounting Vite middleware'))) {
       throw new SelfTestFailure(
@@ -398,8 +655,9 @@ async function runSelfTest(): Promise<void> {
     }
 
     let status: SelfTestEmulatorStatus;
-    if (romRequested) {
+    if (selfTestRomRequested) {
       status = await waitForRunningMedia(url);
+      selfTestLastStatus = status;
       const rom = status.rom;
       if (!rom || !rom.model || !rom.width || !rom.height) {
         throw new SelfTestFailure(
@@ -426,6 +684,7 @@ async function runSelfTest(): Promise<void> {
       status = await fetchSelfTestJson<SelfTestEmulatorStatus>(
         new URL('/api/emulator/status', url),
       );
+      selfTestLastStatus = status;
       if (status.status !== 'stopped' || status.rom) {
         throw new SelfTestFailure(
           'unexpected-emulator',
@@ -434,27 +693,9 @@ async function runSelfTest(): Promise<void> {
       }
     }
 
-    const rom = status.rom;
-    const model = rom?.model ?? 'none';
-    const size = rom ? `${rom.width}x${rom.height}` : 'none';
-    const frames = status.videoFrames ?? 0;
-    const audio = status.audioChunks ?? 0;
-    const sampleRate = status.audioSampleRate ?? 0;
-
-    await finishSelfTest(
-      0,
-      [
-        'TPG_SELF_TEST_OK',
-        `packaged=${app.isPackaged ? 1 : 0}`,
-        `rom=${romRequested ? 1 : 0}`,
-        `model=${model}`,
-        `size=${size}`,
-        `frames=${frames}`,
-        `audio=${audio}`,
-        `sampleRate=${sampleRate}`,
-        `pid=${child.pid}`,
-      ].join(' '),
-    );
+    selfTestPid = child.pid;
+    const result = buildSelfTestResult('ok');
+    await finishSelfTest(0, formatSelfTestSuccessLine(result), undefined, result);
   } catch (error) {
     const reason = error instanceof SelfTestFailure ? error.reason : 'unexpected-error';
     const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
