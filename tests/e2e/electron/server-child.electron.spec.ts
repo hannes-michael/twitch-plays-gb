@@ -2,13 +2,14 @@ import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, type ElectronApplication } from '@playwright/test';
 import { createElectronEnv, expect, test } from '../../fixtures/server';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
-const romPath = fileURLToPath(new URL('../../fixtures/roms/test_gb.gb', import.meta.url));
+const relativeRomPath = join('tests', 'fixtures', 'roms', 'test_gb.gb');
+const absoluteRomPath = resolve(repoRoot, relativeRomPath);
 
 interface EmulatorStatus {
   status: string;
@@ -74,11 +75,12 @@ test.describe('electron server child', () => {
           `--user-data-dir=${join(dataDir, 'electron-profile')}`,
           repoRoot,
         ],
+        cwd: repoRoot,
         env: createElectronEnv({
           TPG_DEV: '0',
           TPG_TEST: '0',
           TPG_DATA_DIR: dataDir,
-          TPG_ROM: romPath,
+          TPG_ROM: relativeRomPath,
           TPG_LOG_LEVEL: 'debug',
         }),
       });
@@ -146,7 +148,9 @@ test.describe('electron server child', () => {
       expect(health.body).toMatchObject({ status: 'ok', emulator: 'running' });
 
       // The child's prefixed logs prove native module loading and worker
-      // threads succeeded under ELECTRON_RUN_AS_NODE.
+      // threads succeeded under ELECTRON_RUN_AS_NODE. The ROM was passed as a
+      // repo-relative TPG_ROM; the shell must resolve it before spawning.
+      expect(electronLogs).toContain(`[desktop] ROM: ${absoluteRomPath}`);
       expect(electronLogs).toContain('[server] TPG_URL=');
       expect(electronLogs).toContain('emulator running:');
 
