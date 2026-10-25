@@ -6,6 +6,7 @@ import express, { type Express } from 'express';
 import type { AppConfig } from '../shared/config';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
+import type { EmulatorService } from './emulator/service';
 import { VITE_HMR_PATH } from './upgrade-paths';
 import { readPackageVersion } from './version';
 
@@ -36,6 +37,7 @@ export async function createApp(
   state: ServerState,
   logger: Logger,
   httpServer: HttpServer,
+  emulator: EmulatorService,
 ): Promise<AppContext> {
   const app = express();
   app.disable('x-powered-by');
@@ -58,6 +60,10 @@ export async function createApp(
   // cannot be shadowed by it. The router is mounted before Vite/static so the
   // embedded Vite middleware never proxies API traffic.
   const apiRouter = express.Router();
+  apiRouter.get('/emulator/status', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json(emulator.status());
+  });
   apiRouter.use((_request, response) => {
     response.status(404).json({ error: 'Not found' });
   });

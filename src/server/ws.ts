@@ -1,7 +1,9 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
-import { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { MEDIA_PROTOCOL_VERSION } from '../shared/media-protocol';
+import type { EmulatorService } from './emulator/service';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
 import { APP_WS_PATH, upgradePathname } from './upgrade-paths';
@@ -9,6 +11,8 @@ import { APP_WS_PATH, upgradePathname } from './upgrade-paths';
 export interface WebSocketServerOptions {
   /** Upgrade paths owned by another listener (Vite HMR in dev/test). */
   passThroughPaths?: readonly string[];
+  /** Emulator status source and binary media hub. */
+  emulator: EmulatorService;
 }
 
 function rejectUpgrade(socket: Duplex): void {
@@ -37,7 +41,7 @@ export function createWebSocketServer(
   httpServer: HttpServer,
   state: ServerState,
   logger: Logger,
-  options: WebSocketServerOptions = {},
+  options: WebSocketServerOptions,
 ): WebSocketServer {
   // Use noServer so this server only claims its own upgrade path. Vite attaches
   // its HMR upgrade listener to the same HTTP server; a path-scoped
@@ -65,12 +69,24 @@ export function createWebSocketServer(
 
   httpServer.on('upgrade', handleUpgrade);
   wss.on('close', () => {
+    unsubscribe();
     httpServer.off('upgrade', handleUpgrade);
+  });
+
+  const unsubscribe = options.emulator.onStatusChange((emulatorStatus) => {
+    const message = JSON.stringify({ type: 'state', emulator: emulatorStatus });
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(message);
+    }
   });
 
   wss.on('connection', (socket) => {
     state.clients += 1;
     logger.debug(`websocket client connected (${state.clients} total)`);
+
+    socket.send(JSON.stringify({ type: 'hello', protocol: MEDIA_PROTOCOL_VERSION }));
+    socket.send(JSON.stringify({ type: 'state', emulator: options.emulator.status() }));
+    options.emulator.attachClient(socket);
 
     socket.on('close', () => {
       state.clients = Math.max(0, state.clients - 1);

@@ -1,6 +1,8 @@
+import type { EmulatorLifecycleStatus } from '../shared/emulator-status';
+
 export interface ServerState {
   clients: number;
-  emulator: 'stopped';
+  emulator: EmulatorLifecycleStatus;
 }
 
 export function createServerState(): ServerState {

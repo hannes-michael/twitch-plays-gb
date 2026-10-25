@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { z } from 'zod';
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
@@ -31,6 +31,18 @@ const optionalString = z
   .trim()
   .transform((value) => (value === '' ? undefined : value))
   .optional();
+
+const ROM_EXTENSIONS = new Set(['.gb', '.gbc', '.gba']);
+
+const romValue = z
+  .string()
+  .trim()
+  .min(1, 'expected a ROM path')
+  .transform((value) => resolve(value))
+  .refine((value) => ROM_EXTENSIONS.has(extname(value).toLowerCase()), {
+    message: 'expected a .gb, .gbc, or .gba file',
+  })
+  .refine(existsSync, { message: 'ROM file does not exist' });
 
 const portValue = z
   .union([z.number(), z.string()])
@@ -70,6 +82,7 @@ const ConfigSchema = z
     host: z.string().trim().min(1).default(CONFIG_DEFAULTS.host),
     port: portValue,
     dataDir: z.string().trim().min(1),
+    rom: romValue.optional(),
     channel: optionalString,
     dev: booleanValue.default(CONFIG_DEFAULTS.dev),
     test: booleanValue.default(CONFIG_DEFAULTS.test),
@@ -93,6 +106,7 @@ Options:
   --port <port>          Listen port; use 0 for a random port (default: 3000)
   --data-dir <path>      Data directory (default: data/dev in dev, platform-specific otherwise)
   --config <path>        JSON config file (default: <dataDir>/config.json)
+  --rom <path>           Game Boy, GBC, or GBA ROM to boot (.gb/.gbc/.gba)
   --channel <name>       Twitch channel name
   --log-level <level>    debug | info | warn | error (default: info)
   --dev[=<bool>]         Enable development mode and Vite middleware
@@ -100,7 +114,7 @@ Options:
   -h, --help             Show this help
 
 Environment: HOST, PORT, TPG_HOST, TPG_PORT, TPG_DATA_DIR, TPG_CONFIG,
-TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL`;
+TPG_ROM, TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL`;
 
 export class HelpRequested extends Error {
   constructor() {
@@ -118,6 +132,7 @@ interface CliValues {
   host?: string;
   port?: string;
   dataDir?: string;
+  rom?: string;
   channel?: string;
   dev?: string;
   test?: string;
@@ -126,7 +141,7 @@ interface CliValues {
 }
 
 const BOOLEAN_FLAGS = new Set(['dev', 'test']);
-const VALUE_FLAGS = new Set(['host', 'port', 'data-dir', 'channel', 'log-level', 'config']);
+const VALUE_FLAGS = new Set(['host', 'port', 'data-dir', 'rom', 'channel', 'log-level', 'config']);
 
 function parseCliArgs(argv: string[]): CliValues {
   const values: CliValues = {};
@@ -192,6 +207,9 @@ function parseCliArgs(argv: string[]): CliValues {
       case 'data-dir':
         values.dataDir = value;
         break;
+      case 'rom':
+        values.rom = value;
+        break;
       case 'channel':
         values.channel = value;
         break;
@@ -217,6 +235,7 @@ function readEnv(env: NodeJS.ProcessEnv): Partial<Record<keyof CliValues, string
   if (port !== undefined && port !== '') values.port = port;
 
   if (env.TPG_DATA_DIR) values.dataDir = env.TPG_DATA_DIR;
+  if (env.TPG_ROM) values.rom = env.TPG_ROM;
   if (env.TPG_CHANNEL) values.channel = env.TPG_CHANNEL;
   if (env.TPG_DEV !== undefined) values.dev = env.TPG_DEV;
   if (env.TPG_TEST !== undefined) values.test = env.TPG_TEST;

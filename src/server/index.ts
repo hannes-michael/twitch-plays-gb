@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
+import { EmulatorService } from './emulator/service';
 import { createLogger } from './logger';
 import { createServerState } from './state';
 import { VITE_HMR_PATH } from './upgrade-paths';
@@ -45,11 +46,16 @@ async function main(): Promise<void> {
   logger.info(`data directory: ${config.dataDir}`);
 
   const state = createServerState();
+  const emulator = new EmulatorService(logger);
+  emulator.onStatusChange((emulatorStatus) => {
+    state.emulator = emulatorStatus.status;
+  });
+
   const httpServer = createServer();
   let appContext;
 
   try {
-    appContext = await createApp(config, state, logger, httpServer);
+    appContext = await createApp(config, state, logger, httpServer, emulator);
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
     process.exitCode = 1;
@@ -60,6 +66,7 @@ async function main(): Promise<void> {
   httpServer.on('request', app);
   const wss = createWebSocketServer(httpServer, state, logger, {
     passThroughPaths: config.dev || config.test ? [VITE_HMR_PATH] : [],
+    emulator,
   });
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
@@ -80,7 +87,14 @@ async function main(): Promise<void> {
     const forceExit = setTimeout(() => process.exit(1), SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
 
-    void closeApp()
+    void emulator
+      .close()
+      .catch((closeError: unknown) => {
+        logger.error(
+          `Failed to close emulator after startup error: ${(closeError as Error).message}`,
+        );
+      })
+      .then(() => closeApp())
       .catch((closeError: unknown) => {
         logger.error(`Failed to close app after startup error: ${(closeError as Error).message}`);
       })
@@ -96,6 +110,12 @@ async function main(): Promise<void> {
     const url = `http://${config.host}:${actualPort}`;
     logger.info(`server listening on ${url}`);
     process.stdout.write(`TPG_URL=${url}\n`);
+
+    // Start after listening so /health is available while the ROM boots. A
+    // failed boot is reported through status/state instead of crashing.
+    if (config.rom) {
+      void emulator.start(config.rom);
+    }
   });
 
   let shuttingDown = false;
@@ -117,9 +137,17 @@ async function main(): Promise<void> {
 
     wss.close(() => {
       void (async () => {
-        // Vite's HMR clients are attached to the same HTTP server, so close
-        // Vite (and terminate its sockets) before waiting for HTTP to drain.
+        // Close the emulator worker before Vite and HTTP so no native worker
+        // outlives the server. Vite's HMR clients share this HTTP server, so
+        // close Vite (and terminate its sockets) before waiting for HTTP.
         let appCloseFailed = false;
+        try {
+          await emulator.close();
+        } catch (closeError: unknown) {
+          appCloseFailed = true;
+          logger.error(`Failed to close emulator: ${(closeError as Error).message}`);
+        }
+
         try {
           await closeApp();
         } catch (closeError: unknown) {

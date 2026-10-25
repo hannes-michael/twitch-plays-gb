@@ -15,7 +15,7 @@
     "dev:electron": "node scripts/dev-electron.mjs",
     "build": "npm run build:web && npm run build:server && npm run build:desktop",
     "build:web": "vite build",
-    "build:server": "tsup src/server/index.ts --format esm --platform node --target node22 --out-dir dist/server --sourcemap --clean --external vite",
+    "build:server": "tsup src/server/index.ts --format esm --platform node --target node22 --out-dir dist/server --sourcemap --clean --external vite --external node-mgba",
     "build:desktop": "tsup src/desktop/main.ts src/desktop/preload.ts --format cjs --platform node --target node22 --out-dir dist/desktop --sourcemap --clean --external electron",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
