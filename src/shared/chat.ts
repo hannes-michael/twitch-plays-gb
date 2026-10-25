@@ -37,6 +37,7 @@ export interface ChatTimings {
   inputMaxQueue: number;
   inputMaxPerSecond: number;
   inputStaleMs: number;
+  autosaveIntervalMs: number;
 }
 
 export interface ChatOutageRequest {

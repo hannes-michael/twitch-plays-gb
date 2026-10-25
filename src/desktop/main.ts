@@ -789,6 +789,7 @@ function createChildEnv(dataDir: string): NodeJS.ProcessEnv {
     'TPG_INPUT_MAX_QUEUE',
     'TPG_INPUT_MAX_PER_SECOND',
     'TPG_INPUT_STALE_MS',
+    'TPG_AUTOSAVE_INTERVAL_MS',
     'TPG_BARE_COMMANDS',
     'TPG_CHAT',
   ] as const;

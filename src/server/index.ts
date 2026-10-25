@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { loadConfig, HelpRequested } from '../shared/config';
@@ -170,9 +172,23 @@ async function main(): Promise<void> {
   });
 
   const startSelectedRom = async (): Promise<void> => {
+    const autosaveIntervalMs = config.timings.autosaveIntervalMs;
+
     // Explicit --rom configuration always wins over the persisted choice.
     if (config.rom) {
-      await emulator.start({ romPath: config.rom, romId: null });
+      // There is no imported romId for --rom, so derive a stable key from the
+      // bytes. Moving or renaming the file keeps the same saves.
+      const hash = createHash('sha256')
+        .update(await readFile(config.rom))
+        .digest('hex');
+      const key = `rom-${hash.slice(0, 16)}`;
+      await emulator.start({
+        romPath: config.rom,
+        romId: null,
+        batterySavePath: join(layout.savesDir, `${key}.sav`),
+        stateSavePath: join(layout.statesDir, `${key}.state`),
+        autosaveIntervalMs,
+      });
       return;
     }
 
@@ -189,6 +205,8 @@ async function main(): Promise<void> {
       romPath,
       romId,
       batterySavePath: join(layout.savesDir, `${romId}.sav`),
+      stateSavePath: join(layout.statesDir, `${romId}.state`),
+      autosaveIntervalMs,
     });
   };
 

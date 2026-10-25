@@ -77,7 +77,10 @@ test('server-only scenario', async ({ server }) => {
 
 Test mode refuses to start without an explicit data directory. The fixture
 always passes a fresh temp directory through `--data-dir` and deletes it on
-teardown. Never point tests at your real data directory.
+teardown. Never point tests at your real data directory. To simulate a server
+restart, create a directory with `mkdtemp`, pass `dataDir` to `startServer` with
+`cleanupDataDir: false`, stop and start the process again, then remove the
+directory yourself.
 
 The vendored ROMs under `tests/fixtures/roms/` boot through the normal `--rom`
 config path:
@@ -126,6 +129,18 @@ executes a command. Focused safeguards cover Twitch `bot-badge`/known-bot
 mapping, overlapping chat-source transitions, and input-state WS coalescing.
 No test connects to real Twitch.
 
+`saves.spec.ts` reuses one temp data directory across server restarts with
+`TPG_AUTOSAVE_INTERVAL_MS=250`. It waits for two autosaved generations
+(`states/<romId>.state` and `.prev`), restarts and asserts
+`restoredFrom: "current"`, then corrupts the current file after shutdown and
+asserts fallback to `"previous"` while the emulator keeps running. The second
+scenario drives the dashboard Save button, `/api/emulator/save`, a moderator
+`!save` versus a regular viewer's ignored attempt, and save-on-stop followed by
+a restore on the next start. Status/settings/debug JSON must not contain the
+data directory. The vendored fixture ROMs have no battery-backed SRAM, so no
+battery file is expected; save states are covered instead of fabricated battery
+data.
+
 `setup-import.spec.ts` is the first-run scenario: it checks the legal notice and
 channel step, rejects invalid ROM uploads, imports the vendored GB ROM through
 the file input, reviews and finishes setup, and then drives Stop, Start, and
@@ -168,8 +183,8 @@ model/dimensions, growing video/audio counters, and that the child PID exits
 after `app.close()`. A second launch with `TPG_TEST=1` and short timing values
 asserts the shell forwards `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
 `TPG_RELEASE_FRAMES` to the spawned child (`/api/debug.timings`). The same
-forwarding list also includes the input cooldown/queue/rate/stale values, bare
-commands, and chat source policy.
+forwarding list also includes the input cooldown/queue/rate/stale values,
+`TPG_AUTOSAVE_INTERVAL_MS`, bare commands, and chat source policy.
 `capture-window.electron.spec.ts` uses the external server fixture with
 `TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
 the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,
@@ -235,9 +250,9 @@ uploads logs/artifacts on failure.
 Servers started with `TPG_DEV=1` or `TPG_TEST=1` start a fake chat source and
 expose three developer-only routes:
 
-- `GET /api/debug` returns mode, resolved timings, emulator/media counters,
-  chat status plus recent messages, the full input state/stats, WS client count,
-  and queue length/votes.
+- `GET /api/debug` returns mode, resolved timings, emulator save state/media
+  counters, chat status plus recent messages, the full input state/stats, WS
+  client count, and queue length/votes.
 - `POST /api/test/chat` accepts `{ "user": "...", "text": "..." }` and an
   optional `roles` object (`broadcaster`, `mod`, `vip`, `bot`, `self`) (user ≤ 32
   characters, text ≤ 200, trimmed, control characters rejected), injects the

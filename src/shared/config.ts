@@ -21,6 +21,7 @@ export const CONFIG_DEFAULTS = {
     inputMaxQueue: 10,
     inputMaxPerSecond: 5,
     inputStaleMs: 5_000,
+    autosaveIntervalMs: 60_000,
   },
   chat: {
     bareCommands: false,
@@ -121,6 +122,7 @@ const TimingsSchema = z
     inputMaxQueue: timingValue(1, 1_000, CONFIG_DEFAULTS.timings.inputMaxQueue),
     inputMaxPerSecond: timingValue(1, 1_000, CONFIG_DEFAULTS.timings.inputMaxPerSecond),
     inputStaleMs: timingValue(0, 3_600_000, CONFIG_DEFAULTS.timings.inputStaleMs),
+    autosaveIntervalMs: timingValue(100, 3_600_000, CONFIG_DEFAULTS.timings.autosaveIntervalMs),
   })
   .strict()
   .default({ ...CONFIG_DEFAULTS.timings });
@@ -189,6 +191,7 @@ Options:
   --input-max-queue <count>   Maximum queued inputs (default: 10)
   --input-max-per-second <n>  Global accepted inputs per second (default: 5)
   --input-stale-ms <ms>       Drop inputs older than this at execution (default: 5000)
+  --autosave-interval-ms <ms> Emulator autosave interval (default: 60000, min: 100)
   --bare-commands[=<bool>]    Accept input commands without the ! prefix
   --chat <source>             auto | fake | twitch (default: auto)
   --dev[=<bool>]         Enable development mode and Vite middleware
@@ -199,7 +202,7 @@ Environment: HOST, PORT, TPG_HOST, TPG_PORT, TPG_DATA_DIR, TPG_CONFIG,
 TPG_ROM, TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL,
 TPG_DEMOCRACY_WINDOW_MS, TPG_HOLD_FRAMES, TPG_RELEASE_FRAMES,
 TPG_INPUT_COOLDOWN_MS, TPG_INPUT_MAX_QUEUE, TPG_INPUT_MAX_PER_SECOND,
-TPG_INPUT_STALE_MS, TPG_BARE_COMMANDS, TPG_CHAT`;
+TPG_INPUT_STALE_MS, TPG_AUTOSAVE_INTERVAL_MS, TPG_BARE_COMMANDS, TPG_CHAT`;
 
 export class HelpRequested extends Error {
   constructor() {
@@ -221,6 +224,7 @@ interface TimingValues {
   inputMaxQueue?: string;
   inputMaxPerSecond?: string;
   inputStaleMs?: string;
+  autosaveIntervalMs?: string;
 }
 
 interface ChatValues {
@@ -250,6 +254,7 @@ const TIMING_FLAGS: Record<string, keyof ChatTimings> = {
   'input-max-queue': 'inputMaxQueue',
   'input-max-per-second': 'inputMaxPerSecond',
   'input-stale-ms': 'inputStaleMs',
+  'autosave-interval-ms': 'autosaveIntervalMs',
 };
 
 const BOOLEAN_FLAGS = new Set(['dev', 'test', 'bare-commands']);
@@ -380,6 +385,7 @@ function readEnv(env: NodeJS.ProcessEnv): CliValues {
   if (env.TPG_INPUT_MAX_QUEUE) timings.inputMaxQueue = env.TPG_INPUT_MAX_QUEUE;
   if (env.TPG_INPUT_MAX_PER_SECOND) timings.inputMaxPerSecond = env.TPG_INPUT_MAX_PER_SECOND;
   if (env.TPG_INPUT_STALE_MS) timings.inputStaleMs = env.TPG_INPUT_STALE_MS;
+  if (env.TPG_AUTOSAVE_INTERVAL_MS) timings.autosaveIntervalMs = env.TPG_AUTOSAVE_INTERVAL_MS;
   if (Object.keys(timings).length > 0) values.timings = timings;
 
   const chat: ChatValues = {};

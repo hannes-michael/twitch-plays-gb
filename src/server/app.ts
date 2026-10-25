@@ -6,6 +6,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { chatOutageRequestSchema } from '../shared/chat';
 import type { AppConfig } from '../shared/config';
 import type { DebugSnapshot } from '../shared/debug';
+import type { EmulatorSaveResponse } from '../shared/emulator-status';
 import type { RomImportResponse, RomListResponse, RomResponse } from '../shared/roms';
 import {
   normalizeTwitchChannel,
@@ -128,6 +129,8 @@ export async function createApp(
         romPath,
         romId,
         batterySavePath: join(config.dataDir, 'saves', `${romId}.sav`),
+        stateSavePath: join(config.dataDir, 'states', `${romId}.state`),
+        autosaveIntervalMs: config.timings.autosaveIntervalMs,
       },
     };
   };
@@ -277,8 +280,18 @@ export async function createApp(
 
   apiRouter.post('/emulator/stop', async (_request, response, next) => {
     try {
-      await emulator.stop();
-      const payload: EmulatorOperationResponse = { status: emulator.status() };
+      const saved = await emulator.stop();
+      const payload: EmulatorOperationResponse = { saved, status: emulator.status() };
+      response.json(payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  apiRouter.post('/emulator/save', async (_request, response, next) => {
+    try {
+      const saved = await emulator.saveState('manual');
+      const payload: EmulatorSaveResponse = { saved, status: emulator.status() };
       response.json(payload);
     } catch (error) {
       next(error);

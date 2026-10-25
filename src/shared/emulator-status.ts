@@ -5,6 +5,7 @@ export const AUDIO_TARGET_SAMPLE_RATE = 48_000;
 export type EmulatorLifecycleStatus = 'stopped' | 'starting' | 'running' | 'error';
 export type EmulatorModel = 'DMG' | 'CGB' | 'AGB' | 'SGB';
 export type EmulatorPlatform = 'GB/GBC' | 'GBA';
+export type EmulatorRestoreSource = 'current' | 'previous';
 
 export interface EmulatorRomStatus {
   title: string;
@@ -25,6 +26,16 @@ export interface EmulatorStatus {
   droppedVideoFrames: number;
   droppedAudioChunks: number;
   lastError: string | null;
+  lastSavedAt: string | null;
+  saveCount: number;
+  restoredFrom: EmulatorRestoreSource | null;
+  lastSaveError: string | null;
+  autosaveIntervalMs: number;
+}
+
+export interface EmulatorSaveResponse {
+  saved: boolean;
+  status: EmulatorStatus;
 }
 
 export function createStoppedEmulatorStatus(): EmulatorStatus {
@@ -39,5 +50,10 @@ export function createStoppedEmulatorStatus(): EmulatorStatus {
     droppedVideoFrames: 0,
     droppedAudioChunks: 0,
     lastError: null,
+    lastSavedAt: null,
+    saveCount: 0,
+    restoredFrom: null,
+    lastSaveError: null,
+    autosaveIntervalMs: 0,
   };
 }

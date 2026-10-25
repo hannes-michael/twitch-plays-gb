@@ -104,9 +104,19 @@ and the UI can show the failure. On server start `--rom` wins over the saved
 ROM; the saved ROM starts when no `--rom` is given. A configured `--rom`
 reports `romId: null`.
 
-Battery-backed SRAM is flushed on stop to
-`<dataDir>/saves/<romId>.sav` when the cartridge has a battery. Autosave, save
-states, and restore are later P1 work.
+Battery-backed SRAM is flushed on stop to `<dataDir>/saves/<key>.sav` when the
+cartridge has a battery. Save states live in `<dataDir>/states/<key>.state` with
+one previous generation at `<key>.state.prev`. Imported ROMs use their 64-hex
+`romId` as the key; a `--rom` session uses `rom-<first 16 hex of the ROM's
+sha256>`, so the saves survive moving or renaming the file. A state is written
+through a temp file and rotated, so a crash always leaves one loadable file.
+
+States are saved every 60 seconds by default (configurable), on Stop, Restart,
+ROM change, server quit, and through the dashboard **Save now** button or the
+broadcaster/mod `!save` command. On boot the newest valid state is restored,
+falling back to the previous generation when the current file is corrupt. A
+restart boots a fresh session after saving the old one. The vendored fixture
+ROMs have no battery-backed SRAM, so battery saves legitimately write no file.
 
 ## Chat source and anarchy input
 
@@ -128,9 +138,11 @@ that has no external input.
 Chat messages become input when they match a command. The `!` prefix is
 required by default (`!right`, `!a`, `!start`); aliases include `u`, `d`,
 `st`, and `sel`. Set `TPG_BARE_COMMANDS=1` (or `--bare-commands`) to accept the
-same commands without `!`. Matching is case-insensitive. `mode`, `pause`,
-`resume`, and `save` are recognized as meta commands but are ignored in this
-cycle until the mode/pause/save work lands. Invalid messages, known bots
+same commands without `!`. Matching is case-insensitive. `mode`, `pause`, and
+`resume` are recognized as meta commands but are ignored until the
+mode/pause work lands. `save` is available to the broadcaster and moderators
+and writes a save state; other users are ignored, with the latest attempt
+visible as `lastMeta` in `/api/input/state`. Invalid messages, known bots
 (`nightbot`, `streamelements`, `streamlabs`, `moobot`, `fossabot`,
 `commanderroot`, `sery_bot`), Twitch bot badges (`bot-badge`/`twitchbot`),
 and self messages never enter the queue.
@@ -339,8 +351,9 @@ The server creates this layout on startup:
   settings.json        # channel + selected ROM (written by Finish setup)
   roms.json            # imported ROM metadata (atomic)
   roms/<sha256>.<ext>  # validated ROM files; client names are never used
-  saves/<romId>.sav    # battery-backed SRAM, flushed on stop
-  states/              # reserved for save states
+  saves/<key>.sav      # battery-backed SRAM, flushed on stop
+  states/<key>.state   # newest save state
+  states/<key>.state.prev  # previous generation for corrupt-state fallback
 ```
 
 The JSON config file is `<dataDir>/config.json` unless `--config` or
@@ -453,6 +466,7 @@ shows:
 - fake/Twitch chat source, connection status, channel, and message count;
 - live input mode, queue length, accepted/executed/dropped totals, and the last
   drop reason;
+- last save time/count, restore source, and autosave interval;
 - resolved democracy window, hold/release frames, and input cooldown, queue,
   rate, and stale timings.
 
@@ -504,19 +518,21 @@ These values are resolved through normal configuration (CLI, environment, JSON
 config, defaults) and exposed in the debug panel. Anarchy consumes the input
 values; democracy/pause behavior lands later.
 
-| Setting           | CLI                          | Default | Valid range        |
-| ----------------- | ---------------------------- | ------- | ------------------ |
-| Democracy window  | `--democracy-window-ms <ms>` | 15000   | 1..3600000 ms      |
-| Hold frames       | `--hold-frames <frames>`     | 8       | 1..600 frames      |
-| Release frames    | `--release-frames <frames>`  | 4       | 1..600 frames      |
-| Input cooldown    | `--input-cooldown-ms <ms>`   | 3000    | 0..3600000 ms      |
-| Input queue cap   | `--input-max-queue <count>`  | 10      | 1..1000            |
-| Input rate cap    | `--input-max-per-second <n>` | 5       | 1..1000 per second |
-| Input stale limit | `--input-stale-ms <ms>`      | 5000    | 0..3600000 ms      |
+| Setting           | CLI                           | Default | Valid range        |
+| ----------------- | ----------------------------- | ------- | ------------------ |
+| Democracy window  | `--democracy-window-ms <ms>`  | 15000   | 1..3600000 ms      |
+| Hold frames       | `--hold-frames <frames>`      | 8       | 1..600 frames      |
+| Release frames    | `--release-frames <frames>`   | 4       | 1..600 frames      |
+| Input cooldown    | `--input-cooldown-ms <ms>`    | 3000    | 0..3600000 ms      |
+| Input queue cap   | `--input-max-queue <count>`   | 10      | 1..1000            |
+| Input rate cap    | `--input-max-per-second <n>`  | 5       | 1..1000 per second |
+| Input stale limit | `--input-stale-ms <ms>`       | 5000    | 0..3600000 ms      |
+| Autosave interval | `--autosave-interval-ms <ms>` | 60000   | 100..3600000 ms    |
 
 Environment equivalents: `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`,
 `TPG_RELEASE_FRAMES`, `TPG_INPUT_COOLDOWN_MS`, `TPG_INPUT_MAX_QUEUE`,
-`TPG_INPUT_MAX_PER_SECOND`, and `TPG_INPUT_STALE_MS`. Bare commands use
+`TPG_INPUT_MAX_PER_SECOND`, `TPG_INPUT_STALE_MS`, and
+`TPG_AUTOSAVE_INTERVAL_MS`. Bare commands use
 `TPG_BARE_COMMANDS` (or `--bare-commands`); chat source selection uses
 `TPG_CHAT` (or `--chat auto|fake|twitch`). The Electron shell forwards these
 variables to its spawned server child, including packaged builds. The

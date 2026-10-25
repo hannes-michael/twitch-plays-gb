@@ -13,6 +13,8 @@ export interface SettingsSaveRequest {
 
 export interface EmulatorOperationResponse {
   status: EmulatorStatus;
+  /** Present for stop: whether a save state was written before closing. */
+  saved?: boolean;
 }
 
 const TWITCH_CHANNEL_PATTERN = /^[A-Za-z0-9_]{2,25}$/;
