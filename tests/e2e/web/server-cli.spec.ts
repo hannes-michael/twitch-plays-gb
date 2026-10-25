@@ -102,6 +102,10 @@ test.describe('server CLI', () => {
         democracyWindowMs: 900,
         holdFrames: 8,
         releaseFrames: 4,
+        inputCooldownMs: 3_000,
+        inputMaxQueue: 10,
+        inputMaxPerSecond: 5,
+        inputStaleMs: 5_000,
       });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -189,12 +193,18 @@ test.describe('server fixture', () => {
     }
   });
 
-  test('parses short chat timings from the environment into debug output', async () => {
+  test('parses short chat timings and bare commands from the environment into debug output', async () => {
     const server = await startServer({
       env: {
         TPG_DEMOCRACY_WINDOW_MS: '750',
         TPG_HOLD_FRAMES: '2',
         TPG_RELEASE_FRAMES: '1',
+        TPG_INPUT_COOLDOWN_MS: '100',
+        TPG_INPUT_MAX_QUEUE: '2',
+        TPG_INPUT_MAX_PER_SECOND: '2',
+        TPG_INPUT_STALE_MS: '500',
+        TPG_BARE_COMMANDS: '1',
+        TPG_CHAT: 'fake',
       },
     });
 
@@ -202,8 +212,30 @@ test.describe('server fixture', () => {
       const response = await fetch(`${server.baseURL}/api/debug`);
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({
-        timings: { democracyWindowMs: 750, holdFrames: 2, releaseFrames: 1 },
+        timings: {
+          democracyWindowMs: 750,
+          holdFrames: 2,
+          releaseFrames: 1,
+          inputCooldownMs: 100,
+          inputMaxQueue: 2,
+          inputMaxPerSecond: 2,
+          inputStaleMs: 500,
+        },
       });
+
+      const injected = await fetch(`${server.baseURL}/api/test/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user: 'bare-user', text: 'up' }),
+      });
+      expect(injected.status).toBe(201);
+
+      const state = (await (await fetch(`${server.baseURL}/api/input/state`)).json()) as {
+        stats: { accepted: number };
+        queue: Array<{ button: string }>;
+      };
+      expect(state.stats.accepted).toBe(1);
+      expect(state.queue.map((event) => event.button)).toEqual(['UP']);
     } finally {
       await server.stop();
     }

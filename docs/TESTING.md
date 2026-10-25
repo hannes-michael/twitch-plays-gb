@@ -92,11 +92,37 @@ For tests that use the `app`/`page` fixture, set the Playwright option instead:
 test.use({ emulatorRom: join(romDir, 'test_gb.gb') });
 ```
 
+Short input/democracy timings and other server configuration go through the
+`serverEnv` option, which is passed as normal server environment (never as a
+test-only branch):
+
+```ts
+test.use({
+  emulatorRom: join(romDir, 'test_gb.gb'),
+  serverEnv: {
+    TPG_INPUT_COOLDOWN_MS: '100',
+    TPG_INPUT_MAX_QUEUE: '2',
+    TPG_INPUT_MAX_PER_SECOND: '2',
+    TPG_INPUT_STALE_MS: '500',
+    TPG_HOLD_FRAMES: '2',
+    TPG_RELEASE_FRAMES: '1',
+  },
+});
+```
+
 `emulator-boot.spec.ts` boots GB, GBC, and GBA in one scenario and checks model,
 native dimensions, frame/audio counters, 48 kHz audio, and `/health`.
 `overlay-media.spec.ts` loads `/overlay?client=obs`, checks canvas dimensions
 and pixels, growing counters, and the click-to-unmute audio path. Both wait on
 real status/counters with `expect.poll`; do not replace them with sleeps.
+`chat-input.spec.ts` drives the real GB ROM and fake chat source through the
+developer injection endpoint. It proves FIFO execution, per-user cooldown,
+global rate cap, queue overflow, queue drain after start, and the overlay input
+ticker. A second scenario proves bots/self messages, bare commands (with bare
+mode off), invalid text, and meta commands are ignored; it then disconnects the
+fake source through `/api/test/chat/outage`, checks `/api/chat` and debug status
+while video/audio counters keep growing, reconnects, and executes a command.
+No test connects to real Twitch.
 
 `setup-import.spec.ts` is the first-run scenario: it checks the legal notice and
 channel step, rejects invalid ROM uploads, imports the vendored GB ROM through
@@ -139,7 +165,9 @@ the setup screen, same-origin `/api/emulator/status` and `/health`, GB
 model/dimensions, growing video/audio counters, and that the child PID exits
 after `app.close()`. A second launch with `TPG_TEST=1` and short timing values
 asserts the shell forwards `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
-`TPG_RELEASE_FRAMES` to the spawned child (`/api/debug.timings`).
+`TPG_RELEASE_FRAMES` to the spawned child (`/api/debug.timings`). The same
+forwarding list also includes the input cooldown/queue/rate/stale values, bare
+commands, and chat source policy.
 `capture-window.electron.spec.ts` uses the external server fixture with
 `TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
 the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,
@@ -203,15 +231,24 @@ uploads logs/artifacts on failure.
 ## Fake chat and developer panel (P0-10/P0-11/P0-15)
 
 Servers started with `TPG_DEV=1` or `TPG_TEST=1` start a fake chat source and
-expose two developer-only routes:
+expose three developer-only routes:
 
 - `GET /api/debug` returns mode, resolved timings, emulator/media counters,
-  chat status plus recent messages, WS client count, and placeholder queue
-  values.
-- `POST /api/test/chat` accepts `{ "user": "...", "text": "..." }` (user ≤ 32
+  chat status plus recent messages, the full input state/stats, WS client count,
+  and queue length/votes.
+- `POST /api/test/chat` accepts `{ "user": "...", "text": "..." }` and an
+  optional `roles` object (`broadcaster`, `mod`, `vip`, `bot`, `self`) (user ≤ 32
   characters, text ≤ 200, trimmed, control characters rejected), injects the
   message into the fake source, and returns `201 { ok: true, message }`. Invalid
   payloads return 400.
+- `POST /api/test/chat/outage` accepts `{ "outage": true|false }`, disconnects or
+  reconnects the fake source, and returns `{ ok: true, chat }`. It returns 503 if
+  the active source is not fake and 404 in production.
+
+`GET /api/input/state` exposes the input queue/stats and `GET /api/chat` exposes
+the current chat status. Both are read-only and available in production for the
+dashboard. Input state is also pushed over the WebSocket as `input-state` on
+connect and on every change.
 
 The dashboard mounts the **Developer** panel only when `/health` reports dev/test
 mode, then renders it once `/api/debug` answers 200. Production never requests
@@ -221,17 +258,29 @@ it does not use a UI-only bypass. Injected messages are also broadcast as
 `{ "type": "chat", "message": ... }` on `/ws`. Text is rendered as React text
 nodes, never HTML.
 
-Production mode does not start chat and returns JSON 404 for both routes. Both
-routes also require a loopback peer, so binding to `0.0.0.0` does not expose
-debug state or injection to the LAN. Use fake chat to drive anarchy/democracy
-scenarios deterministically later; do not mock the emulator.
+Production mode starts anonymous read-only Twitch chat only when a channel is
+configured (or no source when not); it never starts the fake source and returns
+JSON 404 for all three developer routes. The developer routes also require a
+loopback peer, so binding to `0.0.0.0` does not expose debug state or injection
+to the LAN. Tests never connect to real Twitch; use fake chat and do not mock the
+emulator.
 
 `dev-panels.spec.ts` covers the panel metrics, fake source status, API and form
 injection, XSS escaping, WS broadcast, and malformed payload. It also checks the
 real WS client count. `server-cli.spec.ts` starts a server with
 `TPG_DEMOCRACY_WINDOW_MS=750`, `TPG_HOLD_FRAMES=2`, and
-`TPG_RELEASE_FRAMES=1` and asserts they appear in `/api/debug`, so short test
-timings use normal config rather than test-only branches.
+`TPG_RELEASE_FRAMES=1` plus the input timing values and
+`TPG_BARE_COMMANDS=1`; it asserts the resolved timings in `/api/debug` and that
+a bare `up` message is accepted. Short timings use normal config rather than
+test-only branches.
+`chat-input.spec.ts` covers the input queue, stats, cooldown/rate/overflow
+drops, drain-after-start, overlay ticker, chat filtering, and the fake outage
+endpoint.
+
+The Twitch source itself is intentionally not E2E-tested: the suite has no
+network dependency and runs with the fake source even in dev/test. It compiles
+into the real server build and uses `ChatClient` anonymous mode with no
+credentials.
 
 ## Failure artifacts
 

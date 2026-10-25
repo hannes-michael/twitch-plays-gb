@@ -785,6 +785,12 @@ function createChildEnv(dataDir: string): NodeJS.ProcessEnv {
     'TPG_DEMOCRACY_WINDOW_MS',
     'TPG_HOLD_FRAMES',
     'TPG_RELEASE_FRAMES',
+    'TPG_INPUT_COOLDOWN_MS',
+    'TPG_INPUT_MAX_QUEUE',
+    'TPG_INPUT_MAX_PER_SECOND',
+    'TPG_INPUT_STALE_MS',
+    'TPG_BARE_COMMANDS',
+    'TPG_CHAT',
   ] as const;
   for (const key of forwardedKeys) {
     const value = process.env[key];

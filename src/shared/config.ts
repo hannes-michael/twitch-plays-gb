@@ -17,8 +17,19 @@ export const CONFIG_DEFAULTS = {
     democracyWindowMs: 15_000,
     holdFrames: 8,
     releaseFrames: 4,
+    inputCooldownMs: 3_000,
+    inputMaxQueue: 10,
+    inputMaxPerSecond: 5,
+    inputStaleMs: 5_000,
+  },
+  chat: {
+    bareCommands: false,
+    source: 'auto',
   },
 } as const;
+
+export const CHAT_SOURCES = ['auto', 'fake', 'twitch'] as const;
+export type ChatSourcePreference = (typeof CHAT_SOURCES)[number];
 
 const booleanValue = z.union([z.boolean(), z.string()]).transform((value, ctx) => {
   if (typeof value === 'boolean') return value;
@@ -106,9 +117,36 @@ const TimingsSchema = z
     democracyWindowMs: timingValue(1, 3_600_000, CONFIG_DEFAULTS.timings.democracyWindowMs),
     holdFrames: timingValue(1, 600, CONFIG_DEFAULTS.timings.holdFrames),
     releaseFrames: timingValue(1, 600, CONFIG_DEFAULTS.timings.releaseFrames),
+    inputCooldownMs: timingValue(0, 3_600_000, CONFIG_DEFAULTS.timings.inputCooldownMs),
+    inputMaxQueue: timingValue(1, 1_000, CONFIG_DEFAULTS.timings.inputMaxQueue),
+    inputMaxPerSecond: timingValue(1, 1_000, CONFIG_DEFAULTS.timings.inputMaxPerSecond),
+    inputStaleMs: timingValue(0, 3_600_000, CONFIG_DEFAULTS.timings.inputStaleMs),
   })
   .strict()
   .default({ ...CONFIG_DEFAULTS.timings });
+
+const chatSourceValue = z
+  .string()
+  .transform((value, ctx) => {
+    const normalized = value.trim().toLowerCase();
+    if ((CHAT_SOURCES as readonly string[]).includes(normalized)) {
+      return normalized as ChatSourcePreference;
+    }
+    ctx.addIssue({
+      code: 'custom',
+      message: `expected one of ${CHAT_SOURCES.join(', ')}, received ${JSON.stringify(value)}`,
+    });
+    return z.NEVER;
+  })
+  .default(CONFIG_DEFAULTS.chat.source);
+
+const ChatSchema = z
+  .object({
+    bareCommands: booleanValue.default(CONFIG_DEFAULTS.chat.bareCommands),
+    source: chatSourceValue,
+  })
+  .strict()
+  .default({ ...CONFIG_DEFAULTS.chat });
 
 const ConfigSchema = z
   .object({
@@ -121,6 +159,7 @@ const ConfigSchema = z
     test: booleanValue.default(CONFIG_DEFAULTS.test),
     logLevel: logLevelValue,
     timings: TimingsSchema,
+    chat: ChatSchema,
   })
   .strict();
 
@@ -146,13 +185,21 @@ Options:
   --democracy-window-ms <ms>  Democracy vote window (default: 15000)
   --hold-frames <frames>      Frames to hold an input (default: 8)
   --release-frames <frames>   Frames to release an input (default: 4)
+  --input-cooldown-ms <ms>    Per-user chat input cooldown (default: 3000)
+  --input-max-queue <count>   Maximum queued inputs (default: 10)
+  --input-max-per-second <n>  Global accepted inputs per second (default: 5)
+  --input-stale-ms <ms>       Drop inputs older than this at execution (default: 5000)
+  --bare-commands[=<bool>]    Accept input commands without the ! prefix
+  --chat <source>             auto | fake | twitch (default: auto)
   --dev[=<bool>]         Enable development mode and Vite middleware
   --test[=<bool>]        Enable test mode and Vite middleware
   -h, --help             Show this help
 
 Environment: HOST, PORT, TPG_HOST, TPG_PORT, TPG_DATA_DIR, TPG_CONFIG,
 TPG_ROM, TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL,
-TPG_DEMOCRACY_WINDOW_MS, TPG_HOLD_FRAMES, TPG_RELEASE_FRAMES`;
+TPG_DEMOCRACY_WINDOW_MS, TPG_HOLD_FRAMES, TPG_RELEASE_FRAMES,
+TPG_INPUT_COOLDOWN_MS, TPG_INPUT_MAX_QUEUE, TPG_INPUT_MAX_PER_SECOND,
+TPG_INPUT_STALE_MS, TPG_BARE_COMMANDS, TPG_CHAT`;
 
 export class HelpRequested extends Error {
   constructor() {
@@ -170,6 +217,15 @@ interface TimingValues {
   democracyWindowMs?: string;
   holdFrames?: string;
   releaseFrames?: string;
+  inputCooldownMs?: string;
+  inputMaxQueue?: string;
+  inputMaxPerSecond?: string;
+  inputStaleMs?: string;
+}
+
+interface ChatValues {
+  bareCommands?: string;
+  source?: string;
 }
 
 interface CliValues {
@@ -183,15 +239,20 @@ interface CliValues {
   logLevel?: string;
   config?: string;
   timings?: TimingValues;
+  chat?: ChatValues;
 }
 
 const TIMING_FLAGS: Record<string, keyof ChatTimings> = {
   'democracy-window-ms': 'democracyWindowMs',
   'hold-frames': 'holdFrames',
   'release-frames': 'releaseFrames',
+  'input-cooldown-ms': 'inputCooldownMs',
+  'input-max-queue': 'inputMaxQueue',
+  'input-max-per-second': 'inputMaxPerSecond',
+  'input-stale-ms': 'inputStaleMs',
 };
 
-const BOOLEAN_FLAGS = new Set(['dev', 'test']);
+const BOOLEAN_FLAGS = new Set(['dev', 'test', 'bare-commands']);
 const VALUE_FLAGS = new Set([
   'host',
   'port',
@@ -200,6 +261,7 @@ const VALUE_FLAGS = new Set([
   'channel',
   'log-level',
   'config',
+  'chat',
   ...Object.keys(TIMING_FLAGS),
 ]);
 
@@ -237,7 +299,8 @@ function parseCliArgs(argv: string[]): CliValues {
         );
       }
       if (name === 'dev') values.dev = value;
-      else values.test = value;
+      else if (name === 'test') values.test = value;
+      else values.chat = { ...values.chat, bareCommands: value };
       continue;
     }
 
@@ -279,6 +342,9 @@ function parseCliArgs(argv: string[]): CliValues {
       case 'config':
         values.config = value;
         break;
+      case 'chat':
+        values.chat = { ...values.chat, source: value };
+        break;
       default: {
         const timingKey = TIMING_FLAGS[name];
         if (timingKey) values.timings = { ...values.timings, [timingKey]: value };
@@ -310,7 +376,16 @@ function readEnv(env: NodeJS.ProcessEnv): CliValues {
   if (env.TPG_DEMOCRACY_WINDOW_MS) timings.democracyWindowMs = env.TPG_DEMOCRACY_WINDOW_MS;
   if (env.TPG_HOLD_FRAMES) timings.holdFrames = env.TPG_HOLD_FRAMES;
   if (env.TPG_RELEASE_FRAMES) timings.releaseFrames = env.TPG_RELEASE_FRAMES;
+  if (env.TPG_INPUT_COOLDOWN_MS) timings.inputCooldownMs = env.TPG_INPUT_COOLDOWN_MS;
+  if (env.TPG_INPUT_MAX_QUEUE) timings.inputMaxQueue = env.TPG_INPUT_MAX_QUEUE;
+  if (env.TPG_INPUT_MAX_PER_SECOND) timings.inputMaxPerSecond = env.TPG_INPUT_MAX_PER_SECOND;
+  if (env.TPG_INPUT_STALE_MS) timings.inputStaleMs = env.TPG_INPUT_STALE_MS;
   if (Object.keys(timings).length > 0) values.timings = timings;
+
+  const chat: ChatValues = {};
+  if (env.TPG_BARE_COMMANDS !== undefined) chat.bareCommands = env.TPG_BARE_COMMANDS;
+  if (env.TPG_CHAT) chat.source = env.TPG_CHAT;
+  if (Object.keys(chat).length > 0) values.chat = chat;
 
   return values;
 }
@@ -410,18 +485,24 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const { config: _configPath, ...cliValues } = cli;
   const fileTimings = fileValues.timings;
   const timingOverrides = { ...envValues.timings, ...cliValues.timings };
+  const fileChat = fileValues.chat;
+  const chatOverrides = { ...envValues.chat, ...cliValues.chat };
   const merged = {
     dataDir: baseDataDir,
     ...fileValues,
     ...envValues,
     ...cliValues,
-    // Let Zod reject non-object timing values from JSON instead of silently
-    // replacing them with defaults. A valid partial object is merged with
-    // env/CLI overrides and Zod fills the remaining fields.
+    // Let Zod reject non-object timing/chat values from JSON instead of
+    // silently replacing them with defaults. A valid partial object is merged
+    // with env/CLI overrides and Zod fills the remaining fields.
     timings:
       fileTimings === undefined || isPlainObject(fileTimings)
         ? { ...(isPlainObject(fileTimings) ? fileTimings : {}), ...timingOverrides }
         : fileTimings,
+    chat:
+      fileChat === undefined || isPlainObject(fileChat)
+        ? { ...(isPlainObject(fileChat) ? fileChat : {}), ...chatOverrides }
+        : fileChat,
   };
 
   const result = ConfigSchema.safeParse(merged);

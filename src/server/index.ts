@@ -6,6 +6,7 @@ import { createApp } from './app';
 import { ChatService } from './chat/service';
 import { ensureDataLayout, type DataLayout } from './data-dirs';
 import { EmulatorService } from './emulator/service';
+import { InputService } from './input/service';
 import { createLogger } from './logger';
 import { RomStore } from './roms/store';
 import { SettingsStore } from './settings';
@@ -76,17 +77,48 @@ async function main(): Promise<void> {
     state.emulator = emulatorStatus.status;
   });
 
-  const chat = new ChatService(logger);
-  if (config.dev || config.test) {
-    await chat.startFake();
+  const chat = new ChatService(logger, {
+    selectSource: (channel) => {
+      // Tests are always deterministic and never touch the network.
+      if (config.test) return 'fake';
+      if (config.dev) {
+        if (config.chat.source === 'twitch') return channel ? 'twitch' : 'none';
+        return 'fake';
+      }
+      if (config.chat.source === 'fake') return 'none';
+      return channel ? 'twitch' : 'none';
+    },
+  });
+
+  await chat.applyChannel(config.channel ?? settings.get().channel ?? null);
+  const chatStatus = chat.getStatus();
+  if (chatStatus.source === 'fake') {
     logger.info('fake chat source started (development/test mode)');
+  } else if (chatStatus.source === 'twitch') {
+    logger.info(`anonymous Twitch chat source selected for #${chatStatus.channel ?? 'unknown'}`);
+  } else {
+    logger.info('no chat source configured');
   }
+
+  const input = new InputService(logger, emulator, chat, config.timings, {
+    bareCommands: config.chat.bareCommands,
+  });
 
   const httpServer = createServer();
   let appContext;
 
   try {
-    appContext = await createApp(config, state, logger, httpServer, emulator, roms, settings, chat);
+    appContext = await createApp(
+      config,
+      state,
+      logger,
+      httpServer,
+      emulator,
+      roms,
+      settings,
+      chat,
+      input,
+    );
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
     process.exitCode = 1;
@@ -99,6 +131,7 @@ async function main(): Promise<void> {
     passThroughPaths: config.dev || config.test ? [VITE_HMR_PATH] : [],
     emulator,
     chat,
+    input,
   });
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
@@ -201,6 +234,13 @@ async function main(): Promise<void> {
         } catch (closeError: unknown) {
           appCloseFailed = true;
           logger.error(`Failed to close emulator: ${(closeError as Error).message}`);
+        }
+
+        try {
+          input.close();
+        } catch (closeError: unknown) {
+          appCloseFailed = true;
+          logger.error(`Failed to close input service: ${(closeError as Error).message}`);
         }
 
         try {

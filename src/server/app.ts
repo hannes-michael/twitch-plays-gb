@@ -3,6 +3,7 @@ import type { Server as HttpServer } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import { chatOutageRequestSchema } from '../shared/chat';
 import type { AppConfig } from '../shared/config';
 import type { DebugSnapshot } from '../shared/debug';
 import type { RomImportResponse, RomListResponse, RomResponse } from '../shared/roms';
@@ -11,6 +12,7 @@ import type { Logger } from './logger';
 import type { ServerState } from './state';
 import type { EmulatorService, EmulatorStartOptions } from './emulator/service';
 import { ChatInputError, ChatUnavailableError, type ChatService } from './chat/service';
+import type { InputService } from './input/service';
 import type { RomStore } from './roms/store';
 import { RomImportError } from './roms/store';
 import { SettingsValidationError, type SettingsStore } from './settings';
@@ -64,6 +66,7 @@ export async function createApp(
   roms: RomStore,
   settings: SettingsStore,
   chat: ChatService,
+  input: InputService,
 ): Promise<AppContext> {
   const app = express();
   app.disable('x-powered-by');
@@ -127,6 +130,16 @@ export async function createApp(
     response.json(emulator.status());
   });
 
+  apiRouter.get('/input/state', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json(input.getState());
+  });
+
+  apiRouter.get('/chat', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json(chat.getStatus());
+  });
+
   apiRouter.get('/settings', (_request, response) => {
     response.set('Cache-Control', 'no-store');
     response.json(settings.get());
@@ -159,7 +172,9 @@ export async function createApp(
         return;
       }
 
-      response.json(await settings.save(channel, romIdValue));
+      const saved = await settings.save(channel, romIdValue);
+      await chat.applyChannel(saved.channel);
+      response.json(saved);
     } catch (error) {
       if (error instanceof SettingsValidationError) {
         response.status(400).json({ error: error.message });
@@ -279,11 +294,13 @@ export async function createApp(
   if (config.dev || config.test) {
     apiRouter.get('/debug', requireLoopbackPeer, (_request, response) => {
       const emulatorStatus = emulator.status();
+      const inputState = input.getState();
       const snapshot: DebugSnapshot = {
         mode,
         timings: config.timings,
         emulator: emulatorStatus,
         chat: { ...chat.getStatus(), recent: chat.getRecent() },
+        input: inputState,
         clients: { total: state.clients },
         media: {
           videoFrames: emulatorStatus.videoFrames,
@@ -291,7 +308,7 @@ export async function createApp(
           fps: emulatorStatus.fps,
           audioSampleRate: emulatorStatus.audioSampleRate,
         },
-        queue: { length: 0, votes: 0 },
+        queue: { length: inputState.queue.length, votes: 0 },
       };
       response.set('Cache-Control', 'no-store');
       response.json(snapshot);
@@ -313,6 +330,30 @@ export async function createApp(
         throw error;
       }
     });
+
+    apiRouter.post(
+      '/test/chat/outage',
+      requireLoopbackPeer,
+      jsonBody,
+      async (request, response, next) => {
+        const parsed = chatOutageRequestSchema.safeParse(request.body);
+        if (!parsed.success) {
+          response.status(400).json({ error: 'Invalid outage request' });
+          return;
+        }
+
+        try {
+          await chat.setFakeOutage(parsed.data.outage);
+          response.json({ ok: true, chat: chat.getStatus() });
+        } catch (error) {
+          if (error instanceof ChatUnavailableError) {
+            response.status(503).json({ error: error.message });
+            return;
+          }
+          next(error);
+        }
+      },
+    );
   }
 
   apiRouter.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {

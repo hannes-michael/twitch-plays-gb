@@ -7,10 +7,18 @@ import {
   type EmulatorRomStatus,
   type EmulatorStatus,
 } from '../../shared/emulator-status';
+import type { InputButton } from '../../shared/input';
 import type { Logger } from '../logger';
 import { MediaHub } from './media-hub';
 
 export type EmulatorStatusListener = (status: EmulatorStatus) => void;
+
+export class EmulatorNotRunningError extends Error {
+  constructor() {
+    super('Emulator is not running');
+    this.name = 'EmulatorNotRunningError';
+  }
+}
 
 export interface EmulatorStartOptions {
   romPath: string;
@@ -106,6 +114,24 @@ export class EmulatorService {
       await this.stopInternal();
       if (this.closing) return;
       await this.startInternal(options);
+    });
+  }
+
+  /**
+   * Presses one button through the same lifecycle queue as start/stop/restart.
+   * A stop requested during a press waits for the short input sequence to
+   * finish; a press that starts after stop throws instead of touching a closed
+   * controller.
+   */
+  press(button: InputButton, holdFrames: number, releaseFrames: number): Promise<void> {
+    return this.enqueue(async () => {
+      const controller = this.controller;
+      if (this.closing || !controller || this.lifecycle.status !== 'running') {
+        throw new EmulatorNotRunningError();
+      }
+
+      const handle = controller.pressButtons([{ button, holdFrames, releaseFrames }]);
+      await handle.promise;
     });
   }
 

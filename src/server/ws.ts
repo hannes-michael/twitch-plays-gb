@@ -5,6 +5,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { MEDIA_PROTOCOL_VERSION } from '../shared/media-protocol';
 import type { ChatService } from './chat/service';
 import type { EmulatorService } from './emulator/service';
+import type { InputService } from './input/service';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
 import { APP_WS_PATH, upgradePathname } from './upgrade-paths';
@@ -16,6 +17,8 @@ export interface WebSocketServerOptions {
   emulator: EmulatorService;
   /** Chat status and text-message broadcast source. */
   chat: ChatService;
+  /** Input queue state and broadcast source. */
+  input: InputService;
 }
 
 function rejectUpgrade(socket: Duplex): void {
@@ -83,11 +86,15 @@ export function createWebSocketServer(
   const unsubscribeChat = options.chat.subscribe((message) => {
     broadcast({ type: 'chat', message });
   });
+  const unsubscribeInput = options.input.subscribe((inputState) => {
+    broadcast({ type: 'input-state', input: inputState });
+  });
 
   httpServer.on('upgrade', handleUpgrade);
   wss.on('close', () => {
     unsubscribeEmulator();
     unsubscribeChat();
+    unsubscribeInput();
     httpServer.off('upgrade', handleUpgrade);
   });
 
@@ -98,6 +105,7 @@ export function createWebSocketServer(
     socket.send(JSON.stringify({ type: 'hello', protocol: MEDIA_PROTOCOL_VERSION }));
     socket.send(JSON.stringify({ type: 'state', emulator: options.emulator.status() }));
     socket.send(JSON.stringify({ type: 'chat-status', chat: options.chat.getStatus() }));
+    socket.send(JSON.stringify({ type: 'input-state', input: options.input.getState() }));
     options.emulator.attachClient(socket);
 
     socket.on('close', () => {

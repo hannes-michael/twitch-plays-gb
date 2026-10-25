@@ -108,6 +108,42 @@ Battery-backed SRAM is flushed on stop to
 `<dataDir>/saves/<romId>.sav` when the cartridge has a battery. Autosave, save
 states, and restore are later P1 work.
 
+## Chat source and anarchy input
+
+Production selects the Twitch chat source when a channel is configured (from
+`--channel`/`TPG_CHANNEL` or the saved setup channel). It connects anonymously
+with `@twurple/chat`; no account token, OAuth secret, or stream key is stored or
+required. Twurple owns reconnect attempts, while `/api/chat` and the developer
+panel expose `connected`, `channel`, and a bounded `lastError`. Chat failures
+never stop the emulator or its input queue.
+
+Test mode always uses the deterministic fake source and never touches the
+network. Development defaults to fake too; `TPG_CHAT=twitch npm run dev` forces
+the real source, and `TPG_CHAT=fake` keeps fake chat in development. In
+production `TPG_CHAT=fake` reports no source rather than exposing a fake chat
+that has no external input.
+
+Chat messages become input when they match a command. The `!` prefix is
+required by default (`!right`, `!a`, `!start`); aliases include `u`, `d`,
+`st`, and `sel`. Set `TPG_BARE_COMMANDS=1` (or `--bare-commands`) to accept the
+same commands without `!`. Matching is case-insensitive. `mode`, `pause`,
+`resume`, and `save` are recognized as meta commands but are ignored in this
+cycle until the mode/pause/save work lands. Invalid messages, known bots
+(`nightbot`, `streamelements`, `streamlabs`, `moobot`, `fossabot`,
+`commanderroot`, `sery_bot`), bot badges, and self messages never enter the
+queue.
+
+Anarchy input is FIFO. A message can be dropped for a per-user cooldown,
+global accepted-inputs-per-second cap, a full queue, a stale queue entry at
+execution time, or an emulator press error. The queue only drains while the
+emulator is running. Stopping the emulator keeps queued inputs; starting it
+again drains them (subject to staleness). `/api/input/state` exposes the mode,
+queue, recent events (bounded to 10), stats, last execution, and last drop.
+Input changes are broadcast on `/ws` as `{ "type": "input-state", "input": ... }`
+and new clients receive the current state immediately. The dashboard polls the
+state once per second, and the overlay consumes the WS messages for its mode,
+queue count, and recent-input ticker.
+
 `--rom` sessions keep their last successful start options for Start and Restart
 requests without an explicit `romId`, so lifecycle controls never switch to the
 saved UI selection. A saved selection is only used when no `--rom` session has
@@ -410,9 +446,11 @@ shows:
 
 - WS client count and emulator status/model;
 - video frames, audio chunks, FPS, and audio sample rate;
-- fake chat source/connection status and message count;
-- placeholder queue length/votes (0 until P1 input queues land);
-- resolved democracy window and hold/release frame timings.
+- fake/Twitch chat source, connection status, channel, and message count;
+- live input mode, queue length, accepted/executed/dropped totals, and the last
+  drop reason;
+- resolved democracy window, hold/release frames, and input cooldown, queue,
+  rate, and stale timings.
 
 The **Test chat** form posts `{ user, text }` to `POST /api/test/chat`. External
 callers can use the same route (loopback only; no auth because it is a local
@@ -425,33 +463,60 @@ curl -sS -X POST http://127.0.0.1:3000/api/test/chat \
 ```
 
 Inputs are trimmed, limited to 32 user and 200 text characters, and reject
-control characters. Recent messages appear in the panel log as escaped React
-text. Each injected message is also broadcast on `/ws` as
-`{ "type": "chat", "message": ... }`, and new clients receive a `chat-status`
-message. Production mode starts no chat source and returns JSON 404 for
-`/api/debug` and `/api/test/chat`.
+control characters. An optional `roles` object (`broadcaster`, `mod`, `vip`,
+`bot`, `self`) mirrors Twitch badges/status for tests. Recent messages appear
+in the panel log as escaped React text. Each injected message is also broadcast
+on `/ws` as `{ "type": "chat", "message": ... }`, and new clients receive a
+`chat-status` and `input-state` message. Production mode starts no fake source
+and returns JSON 404 for `/api/debug`, `/api/test/chat`, and
+`/api/test/chat/outage`.
 
-Both developer routes also require a loopback peer
+The test outage endpoint disconnects or reconnects only the fake source so an
+outage can be exercised without touching the emulator:
+
+```bash
+curl -sS -X POST http://127.0.0.1:3000/api/test/chat/outage \
+  -H 'content-type: application/json' \
+  -d '{"outage":true}'
+
+curl -sS -X POST http://127.0.0.1:3000/api/test/chat/outage \
+  -H 'content-type: application/json' \
+  -d '{"outage":false}'
+```
+
+While disconnected, `/api/chat` and `/api/debug` report `connected: false`,
+`/api/test/chat` returns 503, and the emulator plus any already-queued inputs
+continue normally. The endpoint returns 503 when the active source is not fake.
+
+All developer routes also require a loopback peer
 (`127.0.0.1`, `::1`, or `::ffff:127.0.0.1`), regardless of the bind address.
 Binding the server to `0.0.0.0` still exposes the dashboard and `/health` on the
 LAN, but returns 403 for debug state and fake-chat injection from non-loopback
 clients.
 
-### Chat timings
+### Chat and input timings
 
 These values are resolved through normal configuration (CLI, environment, JSON
-config, defaults) and exposed in the debug panel. P1 democracy/input logic will
-consume them; nothing uses them for feature behavior yet.
+config, defaults) and exposed in the debug panel. Anarchy consumes the input
+values; democracy/pause behavior lands later.
 
-| Setting          | CLI                          | Default | Valid range   |
-| ---------------- | ---------------------------- | ------- | ------------- |
-| Democracy window | `--democracy-window-ms <ms>` | 15000   | 1..3600000 ms |
-| Hold frames      | `--hold-frames <frames>`     | 8       | 1..600 frames |
-| Release frames   | `--release-frames <frames>`  | 4       | 1..600 frames |
+| Setting           | CLI                          | Default | Valid range        |
+| ----------------- | ---------------------------- | ------- | ------------------ |
+| Democracy window  | `--democracy-window-ms <ms>` | 15000   | 1..3600000 ms      |
+| Hold frames       | `--hold-frames <frames>`     | 8       | 1..600 frames      |
+| Release frames    | `--release-frames <frames>`  | 4       | 1..600 frames      |
+| Input cooldown    | `--input-cooldown-ms <ms>`   | 3000    | 0..3600000 ms      |
+| Input queue cap   | `--input-max-queue <count>`  | 10      | 1..1000            |
+| Input rate cap    | `--input-max-per-second <n>` | 5       | 1..1000 per second |
+| Input stale limit | `--input-stale-ms <ms>`      | 5000    | 0..3600000 ms      |
 
-Environment equivalents: `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
-`TPG_RELEASE_FRAMES`. The Electron shell forwards these three variables to its
-spawned server child, including packaged builds. The hold/release defaults match
-node-mgba's input timing.
+Environment equivalents: `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`,
+`TPG_RELEASE_FRAMES`, `TPG_INPUT_COOLDOWN_MS`, `TPG_INPUT_MAX_QUEUE`,
+`TPG_INPUT_MAX_PER_SECOND`, and `TPG_INPUT_STALE_MS`. Bare commands use
+`TPG_BARE_COMMANDS` (or `--bare-commands`); chat source selection uses
+`TPG_CHAT` (or `--chat auto|fake|twitch`). The Electron shell forwards these
+variables to its spawned server child, including packaged builds. The
+hold/release defaults match node-mgba's input timing. A cooldown or stale value
+of 0 disables that check.
 
 OBS setup documentation remains a manual checklist in `docs/OBS.md`.
