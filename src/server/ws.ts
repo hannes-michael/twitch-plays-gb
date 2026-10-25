@@ -1,14 +1,40 @@
-import type { Server as HttpServer } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
+
+const WS_PATH = '/ws';
 
 export function createWebSocketServer(
   httpServer: HttpServer,
   state: ServerState,
   logger: Logger,
 ): WebSocketServer {
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  // Use noServer so this server only claims its own upgrade path. Vite attaches
+  // its HMR upgrade listener to the same HTTP server; a path-scoped
+  // `new WebSocketServer({ server, path })` would abort Vite's upgrades.
+  const wss = new WebSocketServer({ noServer: true });
+
+  const handleUpgrade = (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    let pathname: string;
+    try {
+      pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+    } catch {
+      return;
+    }
+
+    if (pathname !== WS_PATH) return;
+
+    wss.handleUpgrade(request, socket, head, (webSocket) => {
+      wss.emit('connection', webSocket, request);
+    });
+  };
+
+  httpServer.on('upgrade', handleUpgrade);
+  wss.on('close', () => {
+    httpServer.off('upgrade', handleUpgrade);
+  });
 
   wss.on('connection', (socket) => {
     state.clients += 1;

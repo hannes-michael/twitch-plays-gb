@@ -44,10 +44,11 @@ async function main(): Promise<void> {
   logger.info(`data directory: ${config.dataDir}`);
 
   const state = createServerState();
+  const httpServer = createServer();
   let appContext;
 
   try {
-    appContext = await createApp(config, state, logger);
+    appContext = await createApp(config, state, logger, httpServer);
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
     process.exitCode = 1;
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
   }
 
   const { app, close: closeApp } = appContext;
-  const httpServer = createServer(app);
+  httpServer.on('request', app);
   const wss = createWebSocketServer(httpServer, state, logger);
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
@@ -112,23 +113,26 @@ async function main(): Promise<void> {
     }
 
     wss.close(() => {
-      httpServer.close((error) => {
-        if (error) logger.error(`HTTP server close error: ${error.message}`);
+      void (async () => {
+        // Vite's HMR clients are attached to the same HTTP server, so close
+        // Vite (and terminate its sockets) before waiting for HTTP to drain.
+        let appCloseFailed = false;
+        try {
+          await closeApp();
+        } catch (closeError: unknown) {
+          appCloseFailed = true;
+          logger.error(`Failed to close app: ${(closeError as Error).message}`);
+        }
+
+        httpServer.close((error) => {
+          if (error) logger.error(`HTTP server close error: ${error.message}`);
+          httpServer.closeIdleConnections();
+          clearTimeout(forceExit);
+          process.exit(error || appCloseFailed ? 1 : 0);
+        });
+
         httpServer.closeIdleConnections();
-
-        void closeApp()
-          .then(() => {
-            clearTimeout(forceExit);
-            process.exit(error ? 1 : 0);
-          })
-          .catch((closeError: unknown) => {
-            logger.error(`Failed to close app: ${(closeError as Error).message}`);
-            clearTimeout(forceExit);
-            process.exit(1);
-          });
-      });
-
-      httpServer.closeIdleConnections();
+      })();
     });
   };
 

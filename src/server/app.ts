@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import type { Server as HttpServer } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
@@ -11,6 +12,7 @@ const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
 const webRoot = join(projectRoot, 'web');
 const distWebRoot = join(projectRoot, 'dist', 'web');
 const viteConfigPath = join(projectRoot, 'vite.config.ts');
+const VITE_HMR_PATH = '/__vite_hmr';
 
 export interface AppContext {
   app: Express;
@@ -33,6 +35,7 @@ export async function createApp(
   config: AppConfig,
   state: ServerState,
   logger: Logger,
+  httpServer: HttpServer,
 ): Promise<AppContext> {
   const app = express();
   app.disable('x-powered-by');
@@ -97,11 +100,11 @@ export async function createApp(
       appType: 'spa',
       server: {
         middlewareMode: true,
-        // Vite's HMR socket stays on its own loopback port so it cannot clash
-        // with the app's /ws endpoint on the main HTTP server. Keep it enabled
-        // in test mode too: Vite always injects its client, and disabling only
-        // the socket would surface as an unhandled renderer error.
-        ws: { host: config.host },
+        // Attach Vite's HMR WebSocket to the main HTTP server on a dedicated
+        // path. This keeps dev/test on a single server (and a single random
+        // port) instead of a shared fixed 24678 listener that would collide
+        // between concurrent servers.
+        ws: { server: httpServer, path: VITE_HMR_PATH },
       },
     });
     app.use(vite.middlewares);
