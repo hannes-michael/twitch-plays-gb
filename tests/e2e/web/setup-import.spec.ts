@@ -52,41 +52,49 @@ async function exists(path: string): Promise<boolean> {
 }
 
 test.describe('first-run setup and ROM import', () => {
-  test('imports a ROM, persists settings, and controls the emulator lifecycle', async ({ app }) => {
+  test('imports a ROM, persists settings, and controls the emulator lifecycle', async ({
+    server,
+    page,
+  }) => {
     test.setTimeout(120_000);
 
     const pageErrors: string[] = [];
     const consoleErrors: string[] = [];
-    app.page.on('pageerror', (error) => pageErrors.push(error.message));
-    app.page.on('console', (message) => {
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text());
     });
 
+    // Attach the renderer error listeners before the first navigation so
+    // load-time failures are part of the assertion.
+    const navResponse = await page.goto(server.baseURL, { waitUntil: 'domcontentloaded' });
+    expect(navResponse?.ok()).toBe(true);
+
     const readSettings = async (): Promise<SettingsResponse> => {
-      const response = await app.request.get(`${app.baseURL}/api/settings`);
+      const response = await server.request.get(`${server.baseURL}/api/settings`);
       expect(response.status()).toBe(200);
       return (await response.json()) as SettingsResponse;
     };
     const readStatus = async (): Promise<EmulatorStatus> => {
-      const response = await app.request.get(`${app.baseURL}/api/emulator/status`);
+      const response = await server.request.get(`${server.baseURL}/api/emulator/status`);
       expect(response.status()).toBe(200);
       return (await response.json()) as EmulatorStatus;
     };
 
     // Step 1: legal notice, channel, and no persisted configuration yet.
-    await expect(app.page.getByRole('heading', { name: 'Twitch Plays GB' })).toBeVisible();
-    await expect(app.page.getByTestId('setup-step')).toHaveAttribute('data-step', '1');
-    await expect(app.page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
-    await expect(app.page.getByText('Before you start')).toBeVisible();
-    await expect(app.page.getByText(/legally obtained ROMs/)).toBeVisible();
-    await expect(app.page.getByLabel('Twitch channel')).toBeVisible();
-    await expect(app.page.getByRole('button', { name: 'Continue' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Twitch Plays GB' })).toBeVisible();
+    await expect(page.getByTestId('setup-step')).toHaveAttribute('data-step', '1');
+    await expect(page.getByRole('heading', { name: 'First-run setup' })).toBeVisible();
+    await expect(page.getByText('Before you start')).toBeVisible();
+    await expect(page.getByText(/legally obtained ROMs/)).toBeVisible();
+    await expect(page.getByLabel('Twitch channel')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
     expect(await readSettings()).toEqual({ channel: null, romId: null, firstRun: true });
 
     // Invalid uploads are rejected through the same API the UI uses.
     const gbBytes = await readFile(gbRomPath);
     const postRom = (filename: string | undefined, data: Buffer) =>
-      app.request.post(`${app.baseURL}/api/roms`, {
+      server.request.post(`${server.baseURL}/api/roms`, {
         headers: {
           'content-type': 'application/octet-stream',
           ...(filename === undefined ? {} : { 'x-filename': filename }),
@@ -111,20 +119,20 @@ test.describe('first-run setup and ROM import', () => {
     expect(((await missingFilename.json()) as { error: string }).error).toMatch(/filename/i);
 
     // Continue must not persist settings before the review step finishes.
-    await app.page.getByLabel('Twitch channel').fill('example_channel');
-    await app.page.getByRole('button', { name: 'Continue' }).click();
-    await expect(app.page.getByTestId('setup-step')).toHaveAttribute('data-step', '2');
-    await expect(app.page.getByTestId('rom-file-input')).toBeVisible();
+    await page.getByLabel('Twitch channel').fill('example_channel');
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByTestId('setup-step')).toHaveAttribute('data-step', '2');
+    await expect(page.getByTestId('rom-file-input')).toBeVisible();
     expect(await readSettings()).toEqual({ channel: null, romId: null, firstRun: true });
 
     // Import the real DMG fixture through the browser file input.
-    await app.page.getByTestId('rom-file-input').setInputFiles(gbRomPath);
-    const romList = app.page.getByTestId('rom-list');
+    await page.getByTestId('rom-file-input').setInputFiles(gbRomPath);
+    const romList = page.getByTestId('rom-list');
     await expect(romList.getByText(/mooneye-gb/)).toBeVisible();
     await expect(romList.getByTestId('rom-model').first()).toHaveText('DMG');
     expect(await readSettings()).toEqual({ channel: null, romId: null, firstRun: true });
 
-    const listResponse = await app.request.get(`${app.baseURL}/api/roms`);
+    const listResponse = await server.request.get(`${server.baseURL}/api/roms`);
     expect(listResponse.status()).toBe(200);
     const listBody = (await listResponse.json()) as { roms: RomMetadata[] };
     expect(listBody.roms).toHaveLength(1);
@@ -140,13 +148,13 @@ test.describe('first-run setup and ROM import', () => {
     });
     expect(rom.id).toMatch(/^[a-f0-9]{64}$/);
     expect(rom.name).not.toMatch(/[/\\]/);
-    expect(JSON.stringify(listBody)).not.toContain(app.dataDir);
+    expect(JSON.stringify(listBody)).not.toContain(server.dataDir);
 
-    const romResponse = await app.request.get(`${app.baseURL}/api/roms/${rom.id}`);
+    const romResponse = await server.request.get(`${server.baseURL}/api/roms/${rom.id}`);
     expect(romResponse.status()).toBe(200);
     const romBody = (await romResponse.json()) as { rom: RomMetadata };
     expect(romBody.rom.id).toBe(rom.id);
-    expect(JSON.stringify(romBody)).not.toContain(app.dataDir);
+    expect(JSON.stringify(romBody)).not.toContain(server.dataDir);
 
     // Disk names are server-generated. A traversal-style client filename with
     // identical bytes deduplicates and must never create a path outside roms/.
@@ -158,28 +166,28 @@ test.describe('first-run setup and ROM import', () => {
     };
     expect(traversalBody).toMatchObject({ created: false, rom: { id: rom.id } });
     expect(traversalBody.rom.name).not.toMatch(/[/\\]/);
-    expect(JSON.stringify(traversalBody)).not.toContain(app.dataDir);
+    expect(JSON.stringify(traversalBody)).not.toContain(server.dataDir);
 
-    const romFiles = await readdir(join(app.dataDir, 'roms'));
+    const romFiles = await readdir(join(server.dataDir, 'roms'));
     expect(romFiles).toEqual([`${rom.id}.gb`]);
-    expect(await exists(join(app.dataDir, 'evil.gb'))).toBe(false);
-    expect(await exists(join(app.dataDir, 'roms', 'evil.gb'))).toBe(false);
+    expect(await exists(join(server.dataDir, 'evil.gb'))).toBe(false);
+    expect(await exists(join(server.dataDir, 'roms', 'evil.gb'))).toBe(false);
 
     // Review, then finish. Only Finish writes settings and starts the ROM.
-    await app.page.getByRole('button', { name: 'Continue' }).click();
-    await expect(app.page.getByTestId('setup-step')).toHaveAttribute('data-step', '3');
-    await expect(app.page.getByTestId('review-channel')).toHaveText('example_channel');
-    await expect(app.page.getByTestId('review-rom')).toContainText(/mooneye-gb/);
+    await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page.getByTestId('setup-step')).toHaveAttribute('data-step', '3');
+    await expect(page.getByTestId('review-channel')).toHaveText('example_channel');
+    await expect(page.getByTestId('review-rom')).toContainText(/mooneye-gb/);
     expect(await readSettings()).toEqual({ channel: null, romId: null, firstRun: true });
 
-    await app.page.getByTestId('setup-finish').click();
-    await expect(app.page.getByTestId('emulator-status')).toHaveText('running', {
+    await page.getByTestId('setup-finish').click();
+    await expect(page.getByTestId('emulator-status')).toHaveText('running', {
       timeout: 30_000,
     });
 
     const settings = await readSettings();
     expect(settings).toEqual({ channel: 'example_channel', romId: rom.id, firstRun: false });
-    expect(JSON.stringify(settings)).not.toContain(app.dataDir);
+    expect(JSON.stringify(settings)).not.toContain(server.dataDir);
 
     await expect.poll(async () => (await readStatus()).status, { timeout: 30_000 }).toBe('running');
     const running = await readStatus();
@@ -195,7 +203,7 @@ test.describe('first-run setup and ROM import', () => {
       audioSampleRate: 48_000,
       lastError: null,
     });
-    expect(JSON.stringify(running)).not.toContain(app.dataDir);
+    expect(JSON.stringify(running)).not.toContain(server.dataDir);
     await expect
       .poll(async () => (await readStatus()).videoFrames, { timeout: 20_000 })
       .toBeGreaterThan(0);
@@ -203,27 +211,24 @@ test.describe('first-run setup and ROM import', () => {
       .poll(async () => (await readStatus()).audioChunks, { timeout: 20_000 })
       .toBeGreaterThan(0);
 
-    const health = (await (await app.request.get(`${app.baseURL}/health`)).json()) as {
+    const health = (await (await server.request.get(`${server.baseURL}/health`)).json()) as {
       emulator: string;
     };
     expect(health.emulator).toBe('running');
 
-    const debugResponse = await app.request.get(`${app.baseURL}/api/debug`);
+    const debugResponse = await server.request.get(`${server.baseURL}/api/debug`);
     expect(debugResponse.status()).toBe(200);
-    expect(JSON.stringify(await debugResponse.json())).not.toContain(app.dataDir);
+    expect(JSON.stringify(await debugResponse.json())).not.toContain(server.dataDir);
 
-    await expect(app.page.getByTestId('open-overlay')).toHaveAttribute(
-      'href',
-      '/overlay?client=obs',
-    );
+    await expect(page.getByTestId('open-overlay')).toHaveAttribute('href', '/overlay?client=obs');
 
     // Stop, start, and restart are serialized and reflected in UI and API.
-    await app.page.getByTestId('stop-emulator').click();
-    await expect(app.page.getByTestId('emulator-status')).toHaveText('stopped');
+    await page.getByTestId('stop-emulator').click();
+    await expect(page.getByTestId('emulator-status')).toHaveText('stopped');
     await expect.poll(async () => (await readStatus()).status).toBe('stopped');
 
-    await app.page.getByTestId('start-emulator').click();
-    await expect(app.page.getByTestId('emulator-status')).toHaveText('running', {
+    await page.getByTestId('start-emulator').click();
+    await expect(page.getByTestId('emulator-status')).toHaveText('running', {
       timeout: 30_000,
     });
     await expect.poll(async () => (await readStatus()).status, { timeout: 30_000 }).toBe('running');
@@ -234,8 +239,8 @@ test.describe('first-run setup and ROM import', () => {
       .toBeGreaterThan(0);
     expect(beforeRestart.status).toBe('running');
 
-    await app.page.getByTestId('restart-emulator').click();
-    await expect(app.page.getByTestId('emulator-status')).toHaveText('running', {
+    await page.getByTestId('restart-emulator').click();
+    await expect(page.getByTestId('emulator-status')).toHaveText('running', {
       timeout: 30_000,
     });
     await expect
@@ -261,5 +266,103 @@ test.describe('first-run setup and ROM import', () => {
 
     expect(pageErrors, 'page errors').toEqual([]);
     expect(consoleErrors, 'console errors').toEqual([]);
+  });
+
+  test('serializes concurrent ROM imports without duplicates or lost entries', async ({
+    server,
+  }) => {
+    const upload = (filename: string, data: Buffer) =>
+      server.request.post(`${server.baseURL}/api/roms`, {
+        headers: { 'content-type': 'application/octet-stream', 'x-filename': filename },
+        data,
+      });
+
+    const gbBytes = await readFile(gbRomPath);
+    const identical = await Promise.all(
+      Array.from({ length: 5 }, (_, index) => upload(`same-${index}.gb`, gbBytes)),
+    );
+    expect(identical.map((response) => response.status()).sort()).toEqual([
+      200, 200, 200, 200, 201,
+    ]);
+
+    const identicalBodies = await Promise.all(
+      identical.map(
+        async (response) =>
+          (await response.json()) as {
+            rom: RomMetadata;
+            created: boolean;
+          },
+      ),
+    );
+    const ids = new Set(identicalBodies.map((body) => body.rom.id));
+    expect(ids.size).toBe(1);
+    expect(identicalBodies.filter((body) => body.created)).toHaveLength(1);
+
+    const id = identicalBodies[0].rom.id;
+    let list = (await (await server.request.get(`${server.baseURL}/api/roms`)).json()) as {
+      roms: RomMetadata[];
+    };
+    expect(list.roms).toHaveLength(1);
+    expect(await readdir(join(server.dataDir, 'roms'))).toEqual([`${id}.gb`]);
+
+    const distinct = await Promise.all([
+      upload('test_gbc.gbc', await readFile(join(romDir, 'test_gbc.gbc'))),
+      upload('test_gba.gba', await readFile(join(romDir, 'test_gba.gba'))),
+    ]);
+    expect(distinct.map((response) => response.status()).sort()).toEqual([201, 201]);
+
+    list = (await (await server.request.get(`${server.baseURL}/api/roms`)).json()) as {
+      roms: RomMetadata[];
+    };
+    expect(list.roms).toHaveLength(3);
+    expect(new Set(list.roms.map((rom) => rom.id)).size).toBe(3);
+    expect((await readdir(join(server.dataDir, 'roms'))).sort()).toEqual(
+      list.roms.map((rom) => `${rom.id}${rom.extension}`).sort(),
+    );
+  });
+
+  test('rejects shallow structural fakes at the 32 KiB boundary', async ({ server }) => {
+    const upload = (filename: string, data: Buffer) =>
+      server.request.post(`${server.baseURL}/api/roms`, {
+        headers: { 'content-type': 'application/octet-stream', 'x-filename': filename },
+        data,
+      });
+    const expectRejected = async (filename: string, data: Buffer): Promise<void> => {
+      const response = await upload(filename, data);
+      expect(response.status(), `${filename} should be rejected`).toBe(400);
+      expect(((await response.json()) as { error: string }).error).toMatch(
+        /Invalid ROM|too small|header/i,
+      );
+    };
+
+    const gbBytes = await readFile(gbRomPath);
+    const gbaBytes = await readFile(join(romDir, 'test_gba.gba'));
+    const copyLogo = (target: Buffer): Buffer => {
+      gbBytes.copy(target, 0x104, 0x104, 0x134);
+      return target;
+    };
+
+    const gbaZeros = Buffer.alloc(32 * 1024);
+    gbaZeros[0xb2] = 0x96;
+    await expectRejected('zeros.gba', gbaZeros);
+
+    const gbaGarbage = Buffer.alloc(32 * 1024, 0xab);
+    gbaGarbage[0xb2] = 0x96;
+    await expectRejected('garbage.gba', gbaGarbage);
+
+    await expectRejected('logo-truncated.gb', copyLogo(Buffer.alloc(0x150)));
+    await expectRejected('below-minimum.gb', copyLogo(Buffer.alloc(32 * 1024 - 1)));
+    await expectRejected('below-minimum.gba', gbaBytes.subarray(0, 32 * 1024 - 1));
+
+    const minimum = await upload('minimum.gb', copyLogo(Buffer.alloc(32 * 1024)));
+    expect(minimum.status()).toBe(201);
+    const minimumBody = (await minimum.json()) as { rom: RomMetadata };
+    expect(minimumBody.rom).toMatchObject({ size: 32 * 1024, model: 'DMG' });
+
+    const list = (await (await server.request.get(`${server.baseURL}/api/roms`)).json()) as {
+      roms: RomMetadata[];
+    };
+    expect(list.roms.map((rom) => rom.id)).toEqual([minimumBody.rom.id]);
+    expect(await readdir(join(server.dataDir, 'roms'))).toEqual([`${minimumBody.rom.id}.gb`]);
   });
 });

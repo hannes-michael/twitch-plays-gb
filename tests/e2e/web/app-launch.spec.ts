@@ -1,6 +1,8 @@
 import { once } from 'node:events';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import WebSocket from 'ws';
-import { test, expect } from '../../fixtures/server';
+import { test, expect, startServer } from '../../fixtures/server';
 
 test.describe('app launch', () => {
   test('shows the first-run setup screen and a healthy server', async ({ app }) => {
@@ -78,6 +80,35 @@ test.describe('app launch', () => {
     const after = await app.request.get(`${app.baseURL}/api/settings`);
     expect(after.status()).toBe(200);
     expect(await after.json()).toEqual({ channel: null, romId: null, firstRun: true });
+  });
+
+  test('recovers from malformed persisted JSON instead of failing startup', async () => {
+    const server = await startServer({
+      prepareDataDir: async (dataDir) => {
+        await writeFile(join(dataDir, 'settings.json'), '{"version":1,"channel":"truncated');
+        await writeFile(join(dataDir, 'roms.json'), '{"version":1,"roms":[');
+      },
+    });
+
+    try {
+      const health = await fetch(`${server.baseURL}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toMatchObject({ status: 'ok', emulator: 'stopped' });
+
+      const settings = await fetch(`${server.baseURL}/api/settings`);
+      expect(settings.status).toBe(200);
+      expect(await settings.json()).toEqual({ channel: null, romId: null, firstRun: true });
+
+      const roms = await fetch(`${server.baseURL}/api/roms`);
+      expect(roms.status).toBe(200);
+      expect(await roms.json()).toEqual({ roms: [] });
+
+      const logs = server.getLogs();
+      expect(logs).toMatch(/settings file is invalid/i);
+      expect(logs).toMatch(/ROM index is invalid/i);
+    } finally {
+      await server.stop();
+    }
   });
 
   test('answers ping on /ws without disturbing Vite HMR upgrades', async ({ server }) => {

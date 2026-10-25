@@ -32,6 +32,8 @@ export interface StartServerOptions {
   host?: string;
   /** Extra environment values applied after the fixture's isolation defaults. */
   env?: NodeJS.ProcessEnv;
+  /** Seed the temporary data directory after creation and before server startup. */
+  prepareDataDir?: (dataDir: string) => void | Promise<void>;
 }
 
 export interface ServerFixture {
@@ -262,6 +264,17 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   const production = options.mode === 'production';
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? SHUTDOWN_TIMEOUT_MS;
   const dataDir = await mkdtemp(join(tmpdir(), 'tpg-e2e-'));
+  if (options.prepareDataDir) {
+    try {
+      await options.prepareDataDir(dataDir);
+    } catch (error) {
+      await rm(dataDir, { recursive: true, force: true });
+      throw new Error(
+        `Failed to prepare test data directory: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
   const stdoutLog = createLogBuffer();
   const stderrLog = createLogBuffer();
   const logs = (): string => formatLogs(stdoutLog, stderrLog);
