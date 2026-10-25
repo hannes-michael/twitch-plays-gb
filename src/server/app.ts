@@ -97,9 +97,11 @@ export async function createApp(
       appType: 'spa',
       server: {
         middlewareMode: true,
-        // Vite's HMR WebSocket uses its own port for now; attaching it to the
-        // main HTTP server is a P0-07 follow-up.
-        ws: config.dev ? { host: config.host } : false,
+        // Vite's HMR socket stays on its own loopback port so it cannot clash
+        // with the app's /ws endpoint on the main HTTP server. Keep it enabled
+        // in test mode too: Vite always injects its client, and disabling only
+        // the socket would surface as an unhandled renderer error.
+        ws: { host: config.host },
       },
     });
     app.use(vite.middlewares);
