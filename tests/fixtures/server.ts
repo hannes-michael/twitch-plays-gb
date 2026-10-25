@@ -26,6 +26,8 @@ export interface StartServerOptions {
   mode?: 'test' | 'production';
   /** Test-only override for the SIGTERM-to-SIGKILL escalation delay. */
   shutdownTimeoutMs?: number;
+  /** Boot this ROM through the normal `--rom` configuration path. */
+  rom?: string;
 }
 
 export interface ServerFixture {
@@ -44,6 +46,8 @@ export interface AppFixture {
 type Fixtures = {
   server: ServerFixture;
   app: AppFixture;
+  /** Playwright option: boot this ROM through the normal `--rom` config path. */
+  emulatorRom: string;
 };
 
 interface LogBuffer {
@@ -231,6 +235,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   const logs = (): string => formatLogs(stdoutLog, stderrLog);
 
   const serverArgs = ['--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir];
+  if (options.rom) {
+    serverArgs.push('--rom', options.rom);
+  }
   const commandArgs = production
     ? [join(repoRoot, 'dist', 'server', 'index.js'), ...serverArgs]
     : ['--import', 'tsx', join(repoRoot, 'src', 'server', 'index.ts'), ...serverArgs];
@@ -361,8 +368,10 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
 }
 
 export const test = base.extend<Fixtures>({
-  server: async ({ playwright }, use, testInfo) => {
-    const server = await startServer();
+  emulatorRom: ['', { option: true }],
+
+  server: async ({ playwright, emulatorRom }, use, testInfo) => {
+    const server = await startServer({ rom: emulatorRom || undefined });
     const request = await playwright.request.newContext({ baseURL: server.baseURL });
     let failure: unknown;
 

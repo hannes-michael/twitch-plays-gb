@@ -81,8 +81,16 @@ test.describe('app launch', () => {
     try {
       await once(socket, 'open');
       socket.send(JSON.stringify({ type: 'ping' }));
-      const [data] = await once(socket, 'message');
-      expect(JSON.parse(data.toString())).toEqual({ type: 'pong' });
+
+      // The server also sends hello/state messages on connect; wait for pong.
+      for (;;) {
+        const [data] = await once(socket, 'message');
+        const message = JSON.parse(data.toString()) as { type?: string };
+        if (message.type === 'pong') {
+          expect(message).toEqual({ type: 'pong' });
+          break;
+        }
+      }
     } finally {
       socket.close();
     }
