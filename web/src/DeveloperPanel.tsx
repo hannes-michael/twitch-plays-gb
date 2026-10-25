@@ -221,6 +221,27 @@ export default function DeveloperPanel() {
               <dd data-testid="debug-emulator-model">{snapshot.emulator.rom?.model ?? 'none'}</dd>
             </div>
             <div>
+              <dt>Last saved</dt>
+              <dd data-testid="debug-last-saved">{snapshot.emulator.lastSavedAt ?? 'never'}</dd>
+            </div>
+            <div>
+              <dt>Save count</dt>
+              <dd data-testid="debug-save-count">{snapshot.emulator.saveCount}</dd>
+            </div>
+            <div>
+              <dt>Restored from</dt>
+              <dd data-testid="debug-restored-from">{snapshot.emulator.restoredFrom ?? 'none'}</dd>
+            </div>
+            <div>
+              <dt>Autosave interval</dt>
+              <dd>
+                <span data-testid="debug-autosave-interval">
+                  {snapshot.timings.autosaveIntervalMs}
+                </span>{' '}
+                ms
+              </dd>
+            </div>
+            <div>
               <dt>Video frames</dt>
               <dd data-testid="debug-video-frames">{snapshot.media.videoFrames}</dd>
             </div>

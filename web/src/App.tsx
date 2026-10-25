@@ -3,6 +3,7 @@ import type { AppMode } from '@shared/debug';
 import {
   createStoppedEmulatorStatus,
   type EmulatorLifecycleStatus,
+  type EmulatorSaveResponse,
   type EmulatorStatus,
 } from '@shared/emulator-status';
 import type { EmulatorOperationResponse, SettingsResponse } from '@shared/settings';
@@ -35,6 +36,7 @@ export default function App() {
   const [emulator, setEmulator] = useState<EmulatorStatus>(createStoppedEmulatorStatus);
   const [reconfiguring, setReconfiguring] = useState(false);
   const [operation, setOperation] = useState<EmulatorOperation | null>(null);
+  const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const statusEpoch = useRef(0);
 
@@ -189,6 +191,35 @@ export default function App() {
     }
   };
 
+  const saveEmulator = async (): Promise<void> => {
+    if (saving) return;
+
+    setSaving(true);
+    setNotice(null);
+
+    try {
+      const response = await fetch('/api/emulator/save', {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+      });
+      const body = (await response.json().catch(() => null)) as
+        (EmulatorSaveResponse & { error?: string }) | null;
+
+      if (!response.ok || !body?.status) {
+        setNotice(body?.error ?? `Could not save the emulator state (HTTP ${response.status}).`);
+        return;
+      }
+
+      statusEpoch.current += 1;
+      setEmulator(body.status);
+      setNotice(body.saved ? 'Save state written.' : 'No running emulator to save.');
+    } catch {
+      setNotice('Could not reach the local server.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSetupComplete = (
     next: SettingsResponse,
     status: EmulatorStatus | null,
@@ -242,8 +273,10 @@ export default function App() {
           settings={settings}
           emulator={emulator}
           busy={operation}
+          saving={saving}
           notice={notice}
           onOperation={(nextOperation) => void runEmulatorOperation(nextOperation)}
+          onSave={() => void saveEmulator()}
           onReconfigure={() => {
             setNotice(null);
             setReconfiguring(true);

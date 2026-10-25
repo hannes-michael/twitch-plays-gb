@@ -18,17 +18,27 @@ interface DashboardProps {
   settings: SettingsResponse;
   emulator: EmulatorStatus;
   busy: EmulatorOperation | null;
+  saving: boolean;
   notice: string | null;
   onOperation: (operation: EmulatorOperation) => void;
+  onSave: () => void;
   onReconfigure: () => void;
+}
+
+function autosaveLabel(intervalMs: number): string {
+  if (intervalMs <= 0) return 'off';
+  if (intervalMs < 1_000) return `${intervalMs} ms`;
+  return `${Math.round(intervalMs / 1_000)}s`;
 }
 
 export default function Dashboard({
   settings,
   emulator,
   busy,
+  saving,
   notice,
   onOperation,
+  onSave,
   onReconfigure,
 }: DashboardProps) {
   const [input, setInput] = useState<InputState | null>(null);
@@ -112,6 +122,25 @@ export default function Dashboard({
         <div>
           <dt>ROM</dt>
           <dd data-testid="dashboard-rom">{romLabel}</dd>
+        </div>
+      </dl>
+
+      <dl className="dashboard-meta save-meta" aria-label="Save state">
+        <div>
+          <dt>Last saved</dt>
+          <dd data-testid="last-saved">{emulator.lastSavedAt ?? 'never'}</dd>
+        </div>
+        <div>
+          <dt>Saves</dt>
+          <dd data-testid="save-count">{emulator.saveCount}</dd>
+        </div>
+        <div>
+          <dt>Restored</dt>
+          <dd data-testid="restored-from">{emulator.restoredFrom ?? 'none'}</dd>
+        </div>
+        <div>
+          <dt>Autosave</dt>
+          <dd data-testid="autosave-interval">{autosaveLabel(emulator.autosaveIntervalMs)}</dd>
         </div>
       </dl>
 
@@ -206,6 +235,15 @@ export default function Dashboard({
           onClick={() => onOperation('restart')}
         >
           Restart
+        </button>
+        <button
+          type="button"
+          className="secondary-action"
+          data-testid="save-emulator"
+          disabled={busy !== null || saving}
+          onClick={onSave}
+        >
+          {saving ? 'Saving…' : 'Save now'}
         </button>
         <a
           className="secondary-action overlay-link"
