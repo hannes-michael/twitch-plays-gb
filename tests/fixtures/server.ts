@@ -18,6 +18,11 @@ export interface TestServer {
   stop(): Promise<void>;
 }
 
+export interface StartServerOptions {
+  /** Production mode runs the built dist/server entrypoint and static dist/web assets. */
+  mode?: 'test' | 'production';
+}
+
 export interface AppFixture {
   baseURL: string;
   page: Page;
@@ -183,32 +188,33 @@ function waitForUrl(urlPromise: Promise<string>, logs: () => string): Promise<st
  *     const health = await app.request.get(`${app.baseURL}/health`);
  *   });
  */
-export async function startServer(): Promise<TestServer> {
+export async function startServer(options: StartServerOptions = {}): Promise<TestServer> {
+  const production = options.mode === 'production';
   const dataDir = await mkdtemp(join(tmpdir(), 'tpg-e2e-'));
   const stdoutLog = createLogBuffer();
   const stderrLog = createLogBuffer();
   const logs = (): string => formatLogs(stdoutLog, stderrLog);
 
+  const serverArgs = ['--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir];
+  const commandArgs = production
+    ? [join(repoRoot, 'dist', 'server', 'index.js'), ...serverArgs]
+    : ['--import', 'tsx', join(repoRoot, 'src', 'server', 'index.ts'), ...serverArgs];
+
   let child: ChildProcess;
   try {
-    child = spawn(
-      process.platform === 'win32' ? 'npx.cmd' : 'npx',
-      ['tsx', 'src/server/index.ts', '--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir],
-      {
-        cwd: repoRoot,
-        detached: process.platform !== 'win32',
-        env: {
-          ...process.env,
-          TPG_TEST: '1',
-          TPG_DEV: '0',
-          TPG_DATA_DIR: dataDir,
-          TPG_CONFIG: join(dataDir, 'config.json'),
-          TPG_LOG_LEVEL: process.env.TPG_LOG_LEVEL ?? 'debug',
-          FORCE_COLOR: '0',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
+    child = spawn(process.execPath, commandArgs, {
+      cwd: repoRoot,
+      detached: process.platform !== 'win32',
+      env: {
+        ...process.env,
+        TPG_TEST: production ? '0' : '1',
+        TPG_DEV: '0',
+        TPG_DATA_DIR: dataDir,
+        TPG_LOG_LEVEL: process.env.TPG_LOG_LEVEL ?? 'debug',
+        FORCE_COLOR: '0',
       },
-    );
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (error) {
     await rm(dataDir, { recursive: true, force: true });
     throw new Error(
