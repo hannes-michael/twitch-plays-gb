@@ -32,6 +32,7 @@
     "test:e2e:install": "playwright install",
     "package:linux": "npm run build && electron-builder --linux",
     "package:win": "npm run build && electron-builder --win",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "start": "node dist/server/index.js"
   },
   "dependencies": {
