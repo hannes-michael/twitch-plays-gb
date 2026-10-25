@@ -192,19 +192,41 @@ function waitForUrl(urlPromise: Promise<string>, logs: () => string): Promise<st
   });
 }
 
-function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+/**
+ * Returns the current environment without app/test configuration leaks.
+ * Electron tests use this so a developer's TPG_* or HOST/PORT values cannot
+ * change the scenario under test. Pass explicit overrides for each launch.
+ */
+export function createElectronEnv(
+  overrides: Record<string, string | undefined> = {},
+): Record<string, string> {
+  const env: Record<string, string> = {};
 
-  // Developer environment must not leak into the fixture. In particular, a
-  // TPG_CONFIG pointing at a missing file would now be a hard config error.
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('TPG_') || key === 'HOST' || key === 'PORT') {
-      delete env[key];
+  for (const [key, value] of Object.entries(process.env)) {
+    if (
+      key.startsWith('TPG_') ||
+      key === 'HOST' ||
+      key === 'PORT' ||
+      key === 'NODE_OPTIONS' ||
+      key === 'ELECTRON_RUN_AS_NODE'
+    ) {
+      continue;
     }
+    if (value !== undefined) env[key] = value;
   }
 
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined) env[key] = value;
+  }
+
+  return env;
+}
+
+function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEnv {
+  // Developer environment must not leak into the fixture. In particular, a
+  // TPG_CONFIG pointing at a missing file would now be a hard config error.
   return {
-    ...env,
+    ...createElectronEnv(),
     TPG_TEST: production ? '0' : '1',
     TPG_DEV: '0',
     TPG_DATA_DIR: dataDir,

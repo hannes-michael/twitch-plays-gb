@@ -2,7 +2,13 @@ import { execSync } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { expect, startServer, test, type TestServer } from '../../fixtures/server';
+import {
+  createElectronEnv,
+  expect,
+  startServer,
+  test,
+  type TestServer,
+} from '../../fixtures/server';
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
@@ -51,12 +57,11 @@ test.describe('electron app launch', () => {
           `--user-data-dir=${join(server.dataDir, 'electron-profile')}`,
           repoRoot,
         ],
-        env: {
-          ...process.env,
+        env: createElectronEnv({
           TPG_SERVER_URL: server.baseURL,
           TPG_DEV: '0',
           TPG_TEST: '0',
-        },
+        }),
       });
       app.on('window', trackPage);
 
