@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from 'electron';
@@ -17,6 +18,19 @@ const HEALTH_POLL_INTERVAL_MS = 100;
 const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 const LOG_TAIL_LINES = 200;
 const LOG_TAIL_CHARS = 20_000;
+const SELF_TEST_STATUS_TIMEOUT_MS = 30_000;
+const SELF_TEST_POLL_INTERVAL_MS = 100;
+const SELF_TEST_REQUEST_TIMEOUT_MS = 5_000;
+
+function flagEnabled(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+}
+
+const SELF_TEST =
+  process.argv.some(
+    (arg) => arg === '--self-test' || arg === '--self-test=1' || arg === '--self-test=true',
+  ) || flagEnabled(process.env.TPG_SELF_TEST);
 
 let mainWindow: BrowserWindow | null = null;
 let captureWindow: BrowserWindow | null = null;
@@ -27,11 +41,9 @@ let serverLogs: string[] = [];
 let stopping = false;
 let quitting = false;
 let stopPromise: Promise<void> | undefined;
-
-function flagEnabled(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
-}
+let selfTestDataDir: string | undefined;
+let selfTestCreatedDataDir = false;
+let selfTestFinishing = false;
 
 function parseServerUrl(value: string): URL {
   let url: URL;
@@ -141,6 +153,313 @@ function stopServerChild(): Promise<void> {
   });
 
   return stopPromise;
+}
+
+class SelfTestFailure extends Error {
+  readonly reason: string;
+
+  constructor(reason: string, message: string) {
+    super(message);
+    this.name = 'SelfTestFailure';
+    this.reason = reason;
+  }
+}
+
+interface SelfTestRomStatus {
+  title?: string;
+  model?: string;
+  platform?: string;
+  width?: number;
+  height?: number;
+}
+
+interface SelfTestEmulatorStatus {
+  status?: string;
+  rom?: SelfTestRomStatus | null;
+  videoFrames?: number;
+  audioChunks?: number;
+  audioSampleRate?: number;
+  lastError?: string | null;
+}
+
+interface SelfTestPage {
+  status: number;
+  contentType: string;
+  body: string;
+}
+
+function prepareSelfTestDataDir(): string {
+  const override = process.env.TPG_DATA_DIR?.trim();
+  if (override) {
+    const dataDir = resolve(override);
+    process.env.TPG_DATA_DIR = dataDir;
+    return dataDir;
+  }
+
+  const dataDir = mkdtempSync(join(tmpdir(), 'tpg-self-test-'));
+  selfTestCreatedDataDir = true;
+  process.env.TPG_DATA_DIR = dataDir;
+  return dataDir;
+}
+
+function cleanupSelfTestDataDir(): void {
+  if (!selfTestCreatedDataDir || !selfTestDataDir) return;
+
+  try {
+    rmSync(selfTestDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch {
+    // The harness or the OS can clean up a temp directory that is still locked.
+  }
+}
+
+function writeSelfTestLine(stream: NodeJS.WriteStream, line: string): Promise<void> {
+  return new Promise((resolveWrite) => {
+    stream.write(line.endsWith('\n') ? line : `${line}\n`, () => resolveWrite());
+  });
+}
+
+async function finishSelfTest(code: number, line: string, details?: string): Promise<void> {
+  if (selfTestFinishing) return;
+  selfTestFinishing = true;
+
+  let stopError: unknown;
+  try {
+    await stopServerChild();
+  } catch (error) {
+    stopError = error;
+  }
+
+  if (stopError !== undefined) {
+    code = 1;
+    line = 'TPG_SELF_TEST_FAIL reason=server-stop-failed';
+    details =
+      `${details ? `${details}\n` : ''}` +
+      `Failed to stop the server child: ${stopError instanceof Error ? stopError.message : String(stopError)}`;
+  }
+
+  cleanupSelfTestDataDir();
+
+  const stream = code === 0 ? process.stdout : process.stderr;
+  await writeSelfTestLine(stream, line);
+  if (details) await writeSelfTestLine(stream, details);
+
+  app.exit(code);
+}
+
+function failSelfTest(reason: string, message: string): Promise<void> {
+  const details = message.includes('Last server output:')
+    ? message
+    : `${message}\n${formatLogTail()}`;
+  return finishSelfTest(1, `TPG_SELF_TEST_FAIL reason=${reason}`, details);
+}
+
+async function fetchSelfTestPage(url: URL, accept: string): Promise<SelfTestPage> {
+  const response = await fetch(url, {
+    headers: { accept },
+    signal: AbortSignal.timeout(SELF_TEST_REQUEST_TIMEOUT_MS),
+  });
+  const body = await response.text();
+  return {
+    status: response.status,
+    contentType: response.headers.get('content-type') ?? '',
+    body,
+  };
+}
+
+function validatePackagedHtml(name: string, page: SelfTestPage): string | undefined {
+  if (page.status !== 200) return `${name} returned HTTP ${page.status}`;
+  if (!page.contentType.toLowerCase().includes('text/html')) {
+    return `${name} returned content-type ${JSON.stringify(page.contentType)}`;
+  }
+  if (!page.body.includes('<div id="root">')) {
+    return `${name} did not return the built SPA shell`;
+  }
+  if (!page.body.includes('/assets/')) {
+    return `${name} did not reference built web assets`;
+  }
+  if (page.body.includes('/@vite/client') || page.body.includes('@react-refresh')) {
+    return `${name} was served by Vite middleware instead of the packaged assets`;
+  }
+  return undefined;
+}
+
+async function fetchSelfTestJson<T>(url: URL): Promise<T> {
+  const response = await fetch(url, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(SELF_TEST_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`${url.pathname} returned HTTP ${response.status}`);
+  return (await response.json()) as T;
+}
+
+async function waitForRunningMedia(url: URL): Promise<SelfTestEmulatorStatus> {
+  const statusUrl = new URL('/api/emulator/status', url);
+  const deadline = Date.now() + SELF_TEST_STATUS_TIMEOUT_MS;
+  let lastStatus: SelfTestEmulatorStatus | undefined;
+  let lastError = 'no response yet';
+
+  while (Date.now() < deadline) {
+    let status: SelfTestEmulatorStatus;
+
+    try {
+      status = await fetchSelfTestJson<SelfTestEmulatorStatus>(statusUrl);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, SELF_TEST_POLL_INTERVAL_MS));
+      continue;
+    }
+
+    lastStatus = status;
+    if (status.status === 'error') {
+      throw new SelfTestFailure(
+        'emulator-error',
+        `Emulator reported an error: ${status.lastError ?? 'unknown error'}`,
+      );
+    }
+
+    if (
+      status.status === 'running' &&
+      typeof status.videoFrames === 'number' &&
+      status.videoFrames > 0 &&
+      typeof status.audioChunks === 'number' &&
+      status.audioChunks > 0
+    ) {
+      return status;
+    }
+
+    lastError =
+      `status ${status.status ?? 'unknown'}, ` +
+      `frames ${status.videoFrames ?? 0}, audio ${status.audioChunks ?? 0}`;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, SELF_TEST_POLL_INTERVAL_MS));
+  }
+
+  const romDetail = lastStatus?.rom
+    ? ` Last ROM status: ${lastStatus.rom.model ?? 'unknown'} ${lastStatus.rom.width}x${lastStatus.rom.height}.`
+    : '';
+  throw new SelfTestFailure(
+    'emulator-timeout',
+    `Emulator did not become running with video and audio within ` +
+      `${SELF_TEST_STATUS_TIMEOUT_MS}ms (last: ${lastError}).${romDetail}`,
+  );
+}
+
+async function runSelfTest(): Promise<void> {
+  const romRequested = Boolean(process.env.TPG_ROM?.trim());
+
+  try {
+    let started: { child: ChildProcess; url: URL; serverEntry: string };
+    try {
+      started = await startServerChild();
+    } catch (error) {
+      throw new SelfTestFailure(
+        'server-start-failed',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    const { child, url, serverEntry } = started;
+
+    if (typeof child.pid !== 'number' || child.pid <= 0) {
+      throw new SelfTestFailure('server-pid', 'The server child did not report a real PID.');
+    }
+
+    const health = await fetchSelfTestJson<{ status?: string }>(new URL('/health', url));
+    if (health.status !== 'ok') {
+      throw new SelfTestFailure('health', `Unexpected /health payload: ${JSON.stringify(health)}`);
+    }
+
+    const rootPage = await fetchSelfTestPage(new URL('/', url), 'text/html');
+    const overlayPage = await fetchSelfTestPage(new URL('/overlay?client=obs', url), 'text/html');
+    const rootProblem = validatePackagedHtml('GET /', rootPage);
+    if (rootProblem) throw new SelfTestFailure('root-html', rootProblem);
+    const overlayProblem = validatePackagedHtml('GET /overlay?client=obs', overlayPage);
+    if (overlayProblem) throw new SelfTestFailure('overlay-html', overlayProblem);
+
+    if (app.isPackaged && serverLogs.some((line) => line.includes('mounting Vite middleware'))) {
+      throw new SelfTestFailure(
+        'vite-middleware',
+        'The packaged server mounted Vite middleware instead of serving built assets.',
+      );
+    }
+
+    if (app.isPackaged && !serverEntry.includes('app.asar.unpacked')) {
+      throw new SelfTestFailure(
+        'unpacked-entry',
+        `The packaged server did not run from app.asar.unpacked (entry: ${serverEntry}).`,
+      );
+    }
+
+    const configLine = serverLogs.find((line) => line.includes('configuration: host='));
+    if (configLine && (!/\bdev=false\b/.test(configLine) || !/\btest=false\b/.test(configLine))) {
+      throw new SelfTestFailure(
+        'dev-test-flags',
+        `The server child received development/test flags: ${configLine}`,
+      );
+    }
+
+    let status: SelfTestEmulatorStatus;
+    if (romRequested) {
+      status = await waitForRunningMedia(url);
+      const rom = status.rom;
+      if (!rom || !rom.model || !rom.width || !rom.height) {
+        throw new SelfTestFailure(
+          'rom-status',
+          'The emulator did not report ROM model/dimensions.',
+        );
+      }
+
+      const [expectedWidth, expectedHeight] = rom.model === 'AGB' ? [240, 160] : [160, 144];
+      if (rom.width !== expectedWidth || rom.height !== expectedHeight) {
+        throw new SelfTestFailure(
+          'rom-dimensions',
+          `Unexpected dimensions for ${rom.model}: ${rom.width}x${rom.height} ` +
+            `(expected ${expectedWidth}x${expectedHeight}).`,
+        );
+      }
+      if (status.audioSampleRate !== 48_000) {
+        throw new SelfTestFailure(
+          'audio-rate',
+          `Expected 48000 Hz audio, received ${status.audioSampleRate ?? 'unknown'}.`,
+        );
+      }
+    } else {
+      status = await fetchSelfTestJson<SelfTestEmulatorStatus>(
+        new URL('/api/emulator/status', url),
+      );
+      if (status.status !== 'stopped' || status.rom) {
+        throw new SelfTestFailure(
+          'unexpected-emulator',
+          `Without a ROM the emulator should stay stopped, received ${JSON.stringify(status)}.`,
+        );
+      }
+    }
+
+    const rom = status.rom;
+    const model = rom?.model ?? 'none';
+    const size = rom ? `${rom.width}x${rom.height}` : 'none';
+    const frames = status.videoFrames ?? 0;
+    const audio = status.audioChunks ?? 0;
+    const sampleRate = status.audioSampleRate ?? 0;
+
+    await finishSelfTest(
+      0,
+      [
+        'TPG_SELF_TEST_OK',
+        `packaged=${app.isPackaged ? 1 : 0}`,
+        `rom=${romRequested ? 1 : 0}`,
+        `model=${model}`,
+        `size=${size}`,
+        `frames=${frames}`,
+        `audio=${audio}`,
+        `sampleRate=${sampleRate}`,
+        `pid=${child.pid}`,
+      ].join(' '),
+    );
+  } catch (error) {
+    const reason = error instanceof SelfTestFailure ? error.reason : 'unexpected-error';
+    const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    await failSelfTest(reason, message);
+  }
 }
 
 function resolveServerEntry(): string {
@@ -322,7 +641,11 @@ async function waitForHealth(child: ChildProcess, url: URL): Promise<void> {
   );
 }
 
-async function startServerChild(): Promise<{ child: ChildProcess; url: URL }> {
+async function startServerChild(): Promise<{
+  child: ChildProcess;
+  url: URL;
+  serverEntry: string;
+}> {
   const serverEntry = resolveServerEntry();
   if (!existsSync(serverEntry)) {
     throw new Error(
@@ -378,18 +701,25 @@ async function startServerChild(): Promise<{ child: ChildProcess; url: URL }> {
   if (rom) {
     process.stdout.write(`[desktop] ROM: ${rom}\n`);
   }
-  return { child, url };
+  return { child, url, serverEntry };
 }
 
 function handleServerCrash(detail: string): void {
   if (quitting) return;
 
   quitting = true;
+  const reason = `The local server stopped unexpectedly (${detail}).`;
+  process.stderr.write(`[desktop] ${reason}\n`);
+
+  if (SELF_TEST) {
+    void failSelfTest('server-crashed', reason);
+    return;
+  }
+
   const message =
-    `The local server stopped unexpectedly (${detail}).\n\n` +
+    `${reason}\n\n` +
     `Restart ${APP_TITLE}. If this repeats, check the data directory and ROM settings.\n\n` +
     formatLogTail();
-  process.stderr.write(`[desktop] ${message}\n`);
 
   void stopServerChild().finally(() => {
     try {
@@ -574,6 +904,34 @@ function start(): void {
   app.setName(APP_TITLE);
   if (process.platform === 'win32') {
     app.setAppUserModelId('dev.twitchplaysgb.app');
+  }
+
+  if (SELF_TEST) {
+    // Headless packaged smoke mode: no windows, menu, capture window, or
+    // dialogs. It still spawns the real server child through Electron-as-Node
+    // and exercises the packaged assets and native emulator worker.
+    app.disableHardwareAcceleration();
+    selfTestDataDir = prepareSelfTestDataDir();
+    const profileDir = join(selfTestDataDir, 'electron-profile');
+    mkdirSync(profileDir, { recursive: true });
+    app.setPath('userData', profileDir);
+
+    // A self-test always owns its server. External-server and capture settings
+    // from the surrounding shell must not change what is being proven.
+    delete process.env.TPG_SERVER_URL;
+    delete process.env.TPG_SERVER_ENTRY;
+    delete process.env.TPG_CAPTURE;
+
+    process.once('exit', cleanupSelfTestDataDir);
+
+    void app
+      .whenReady()
+      .then(runSelfTest)
+      .catch(async (error: unknown) => {
+        const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        await failSelfTest('startup-failed', message);
+      });
+    return;
   }
 
   let externalUrl: URL | undefined;
