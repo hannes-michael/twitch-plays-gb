@@ -2,25 +2,45 @@ import { z } from 'zod';
 
 /** Browser-safe chat contracts shared by the server, UI, and tests. */
 
+export interface ChatRoles {
+  broadcaster?: boolean;
+  mod?: boolean;
+  vip?: boolean;
+  bot?: boolean;
+  self?: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   user: string;
   text: string;
   receivedAt: string;
+  channel?: string;
+  roles?: ChatRoles;
 }
 
-export type ChatSourceKind = 'fake' | 'none';
+export type ChatSourceKind = 'fake' | 'twitch' | 'none';
 
 export interface ChatStatus {
   source: ChatSourceKind;
   connected: boolean;
   messages: number;
+  channel?: string;
+  lastError?: string;
 }
 
 export interface ChatTimings {
   democracyWindowMs: number;
   holdFrames: number;
   releaseFrames: number;
+  inputCooldownMs: number;
+  inputMaxQueue: number;
+  inputMaxPerSecond: number;
+  inputStaleMs: number;
+}
+
+export interface ChatOutageRequest {
+  outage: boolean;
 }
 
 function hasControlCharacters(value: string): boolean {
@@ -44,11 +64,29 @@ const textValue = z
   .max(200, 'text must be at most 200 characters')
   .refine((value) => !hasControlCharacters(value), 'text must not contain control characters');
 
+const chatRolesSchema = z
+  .object({
+    broadcaster: z.boolean().optional(),
+    mod: z.boolean().optional(),
+    vip: z.boolean().optional(),
+    bot: z.boolean().optional(),
+    self: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const chatMessageInputSchema = z
   .object({
     user: userValue,
     text: textValue,
+    roles: chatRolesSchema,
   })
   .strict();
 
 export type ChatMessageInput = z.infer<typeof chatMessageInputSchema>;
+
+export const chatOutageRequestSchema: z.ZodType<ChatOutageRequest> = z
+  .object({
+    outage: z.boolean(),
+  })
+  .strict();
