@@ -17,7 +17,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -118,7 +118,7 @@ if (!existsSync(builderCli)) {
   process.exit(1);
 }
 
-const outputArg = `--config.directories.output=${relative(repoRoot, outputDir)}`;
+const outputArg = `--config.directories.output=${outputDir}`;
 
 for (const platform of platforms) {
   const platformName = platform === '--win' ? 'Windows' : 'Linux';
@@ -131,6 +131,34 @@ for (const platform of platforms) {
     outputArg,
   ]);
 }
+
+function consolidateArtifacts() {
+  const versionTag = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const versionPattern = new RegExp(`(^|[^0-9.])${versionTag}([^0-9.]|$)`);
+  const metadataFiles = new Set(['latest.yml', 'latest-linux.yml', 'builder-debug.yml']);
+
+  let entries;
+  try {
+    entries = readdirSync(releaseRoot, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const name = entry.name;
+    if (!versionPattern.test(name) && !metadataFiles.has(name)) continue;
+
+    const source = join(releaseRoot, name);
+    const destination = join(outputDir, name);
+    if (existsSync(destination)) continue;
+
+    renameSync(source, destination);
+    console.log(`Moved ${name} into ${relative(repoRoot, outputDir)}/`);
+  }
+}
+
+consolidateArtifacts();
 
 const platformArgs = platforms
   .map((platform) => (platform === '--win' ? '--win' : '--linux'))
