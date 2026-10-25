@@ -240,7 +240,7 @@ export default function Dashboard({
           type="button"
           className="secondary-action"
           data-testid="save-emulator"
-          disabled={busy !== null || saving}
+          disabled={busy !== null || saving || emulator.status !== 'running'}
           onClick={onSave}
         >
           {saving ? 'Saving…' : 'Save now'}
@@ -265,13 +265,18 @@ export default function Dashboard({
         </button>
       </div>
 
+      {emulator.lastSaveError ? (
+        <p className="notice" role="alert" data-testid="save-error">
+          Save failed: {emulator.lastSaveError}
+        </p>
+      ) : null}
       {emulator.lastError ? (
         <p className="notice" role="alert">
           {emulator.lastError}
         </p>
       ) : null}
       {notice ? (
-        <p className="notice" role="status">
+        <p className="notice" role="status" data-testid="dashboard-notice">
           {notice}
         </p>
       ) : null}

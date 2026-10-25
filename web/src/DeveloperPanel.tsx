@@ -229,6 +229,10 @@ export default function DeveloperPanel() {
               <dd data-testid="debug-save-count">{snapshot.emulator.saveCount}</dd>
             </div>
             <div>
+              <dt>Frame index</dt>
+              <dd data-testid="debug-frame-index">{snapshot.emulator.lastFrameIndex}</dd>
+            </div>
+            <div>
               <dt>Restored from</dt>
               <dd data-testid="debug-restored-from">{snapshot.emulator.restoredFrom ?? 'none'}</dd>
             </div>

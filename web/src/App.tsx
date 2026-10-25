@@ -206,13 +206,25 @@ export default function App() {
         (EmulatorSaveResponse & { error?: string }) | null;
 
       if (!response.ok || !body?.status) {
-        setNotice(body?.error ?? `Could not save the emulator state (HTTP ${response.status}).`);
+        setNotice(body?.error || `Could not save the emulator state (HTTP ${response.status}).`);
         return;
       }
 
       statusEpoch.current += 1;
       setEmulator(body.status);
-      setNotice(body.saved ? 'Save state written.' : 'No running emulator to save.');
+
+      if (!body.saved) {
+        if (body.status.lastSaveError) {
+          setNotice(`Save failed: ${body.status.lastSaveError}`);
+        } else if (body.status.status !== 'running') {
+          setNotice('No running emulator to save.');
+        } else {
+          setNotice('Save failed.');
+        }
+        return;
+      }
+
+      setNotice('Save state written.');
     } catch {
       setNotice('Could not reach the local server.');
     } finally {
