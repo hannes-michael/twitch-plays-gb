@@ -26,6 +26,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -547,9 +548,31 @@ async function extractDeb(debPath, extractDir) {
   }
 }
 
-function buildSuccessCheck(run, timeoutMs = options.timeoutMs) {
+async function readSelfTestResult(resultFile) {
+  try {
+    return JSON.parse(await readFile(resultFile, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+function formatSelfTestResultLine(result) {
+  return [
+    'TPG_SELF_TEST_OK',
+    `packaged=${result.packaged}`,
+    `rom=${result.rom}`,
+    `model=${result.model}`,
+    `size=${result.size}`,
+    `frames=${result.frames}`,
+    `audio=${result.audio}`,
+    `sampleRate=${result.sampleRate}`,
+    `pid=${result.pid}`,
+  ].join(' ');
+}
+
+function buildSuccessCheck(run, result, resultFile, timeoutMs = options.timeoutMs) {
   const output = `${run.stdout}\n${run.stderr}`;
-  const successLine = output
+  const stdoutSuccessLine = output
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => line.startsWith('TPG_SELF_TEST_OK '));
@@ -557,41 +580,119 @@ function buildSuccessCheck(run, timeoutMs = options.timeoutMs) {
   if (run.timedOut) {
     return {
       ok: false,
-      successLine,
-      detail: `timed out after ${timeoutMs}ms without TPG_SELF_TEST_OK`,
+      successLine: stdoutSuccessLine,
+      detail: `timed out after ${timeoutMs}ms without a self-test result`,
     };
   }
 
   if (run.error) {
-    return { ok: false, successLine, detail: `could not launch: ${run.error}` };
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail: `could not launch: ${run.error}`,
+    };
+  }
+
+  if (!result) {
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail:
+        `missing or invalid self-test result file: ${resultFile}` +
+        `${run.code !== 0 ? ` (exit ${run.code})` : ''}`,
+    };
+  }
+
+  if (result.status !== 'ok') {
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail:
+        `self-test result status=${result.status}` +
+        `${result.reason ? ` reason=${result.reason}` : ''}` +
+        `${run.code !== 0 ? ` (exit ${run.code})` : ''}`,
+    };
   }
 
   if (run.code !== 0) {
     return {
       ok: false,
-      successLine,
+      successLine: stdoutSuccessLine,
       detail: `exited with code ${run.code}${run.signal ? ` (signal ${run.signal})` : ''}`,
     };
   }
 
-  if (!successLine) {
+  if (result.packaged !== 1) {
     return {
       ok: false,
-      successLine,
-      detail: 'exited 0 without a TPG_SELF_TEST_OK line',
+      successLine: stdoutSuccessLine,
+      detail: 'self-test did not report packaged=1',
     };
   }
 
-  if (!/(?:^|\s)packaged=1(?:\s|$)/.test(successLine)) {
-    return { ok: false, successLine, detail: 'self-test did not report packaged=1' };
+  const expectedRom = options.noRom ? 0 : 1;
+  if (result.rom !== expectedRom) {
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail: `self-test did not report rom=${expectedRom}`,
+    };
   }
 
-  const expectedRom = options.noRom ? 'rom=0' : 'rom=1';
-  if (!new RegExp(`(?:^|\\s)${expectedRom}(?:\\s|$)`).test(successLine)) {
-    return { ok: false, successLine, detail: `self-test did not report ${expectedRom}` };
+  if (!Number.isInteger(result.pid) || result.pid <= 0) {
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail: 'self-test result has no server pid',
+    };
   }
 
-  return { ok: true, successLine, detail: successLine };
+  if (expectedRom === 1) {
+    if (typeof result.model !== 'string' || result.model === 'none') {
+      return {
+        ok: false,
+        successLine: stdoutSuccessLine,
+        detail: 'self-test result has no ROM model',
+      };
+    }
+    if (typeof result.size !== 'string' || result.size === 'none') {
+      return {
+        ok: false,
+        successLine: stdoutSuccessLine,
+        detail: 'self-test result has no ROM dimensions',
+      };
+    }
+    if (!(typeof result.frames === 'number' && result.frames > 0)) {
+      return {
+        ok: false,
+        successLine: stdoutSuccessLine,
+        detail: 'self-test result has no video frames',
+      };
+    }
+    if (!(typeof result.audio === 'number' && result.audio > 0)) {
+      return {
+        ok: false,
+        successLine: stdoutSuccessLine,
+        detail: 'self-test result has no audio chunks',
+      };
+    }
+    if (result.sampleRate !== 48_000) {
+      return {
+        ok: false,
+        successLine: stdoutSuccessLine,
+        detail: `self-test result audioSampleRate=${result.sampleRate}`,
+      };
+    }
+  } else if (result.frames !== 0 || result.audio !== 0) {
+    return {
+      ok: false,
+      successLine: stdoutSuccessLine,
+      detail: 'self-test reported media counters without a ROM',
+    };
+  }
+
+  const successLine = formatSelfTestResultLine(result);
+  return { ok: true, successLine, detail: successLine, result };
 }
 
 async function checkOrphan(pid, useWine) {
@@ -616,12 +717,16 @@ async function runLinuxSelfTest({
   timeoutMs = options.timeoutMs,
 }) {
   const displayPrefix = await linuxDisplayPrefix();
+  const resultFile = join(currentDataDir, 'self-test-result.json');
+  await rm(resultFile, { force: true });
+
   const env = createSmokeEnv({
     ...extraEnv,
     TPG_DATA_DIR: currentDataDir,
     TPG_LOG_LEVEL: 'debug',
     TPG_DEV: '1',
     TPG_TEST: '1',
+    TPG_SELF_TEST_RESULT: resultFile,
     ...(options.noRom ? {} : { TPG_ROM: romPath }),
   });
 
@@ -650,13 +755,14 @@ async function runLinuxSelfTest({
   ) {
     sandboxFallback = true;
     extraArgs = ['--no-sandbox'];
+    await rm(resultFile, { force: true });
     run = await runOnce([...extraArgs, ...baseArgs, '--self-test']);
   }
 
-  const check = buildSuccessCheck(run, timeoutMs);
+  const result = await readSelfTestResult(resultFile);
+  const check = buildSuccessCheck(run, result, resultFile, timeoutMs);
   if (check.ok) {
-    const pid = Number(/(?:^|\s)pid=(\d+)(?:\s|$)/.exec(check.successLine)?.[1]);
-    const orphan = await checkOrphan(pid, false);
+    const orphan = await checkOrphan(result?.pid, false);
     if (orphan) {
       return {
         ...check,
@@ -665,11 +771,12 @@ async function runLinuxSelfTest({
         artifact,
         run,
         sandboxFallback,
+        result,
       };
     }
   }
 
-  return { ...check, artifact, run, sandboxFallback };
+  return { ...check, artifact, run, sandboxFallback, result };
 }
 
 let currentDataDir;
@@ -684,7 +791,11 @@ async function runWindowsSelfTest({ artifact, executable, baseArgs = [], extraEn
     throw new Error('Wine is not installed.');
   }
 
+  const resultFileUnix = join(currentDataDir, 'self-test-result.json');
+  await rm(resultFileUnix, { force: true });
+
   const dataDir = useWine ? await toWinePath(currentDataDir) : currentDataDir;
+  const resultFile = useWine ? await toWinePath(resultFileUnix) : resultFileUnix;
   const rom = options.noRom ? undefined : useWine ? await toWinePath(romPath) : romPath;
   const env = createSmokeEnv({
     ...extraEnv,
@@ -692,6 +803,7 @@ async function runWindowsSelfTest({ artifact, executable, baseArgs = [], extraEn
     TPG_LOG_LEVEL: 'debug',
     TPG_DEV: '1',
     TPG_TEST: '1',
+    TPG_SELF_TEST_RESULT: resultFile,
     ...(rom ? { TPG_ROM: rom } : {}),
     ...(useWine ? { WINEDEBUG: '-all' } : {}),
   });
@@ -705,16 +817,42 @@ async function runWindowsSelfTest({ artifact, executable, baseArgs = [], extraEn
     cwd: repoRoot,
     timeoutMs: options.timeoutMs,
   });
-  const check = buildSuccessCheck(run);
+  const result = await readSelfTestResult(resultFileUnix);
+  const check = buildSuccessCheck(run, result, resultFileUnix);
   if (check.ok) {
-    const pid = Number(/(?:^|\s)pid=(\d+)(?:\s|$)/.exec(check.successLine)?.[1]);
-    const orphan = await checkOrphan(pid, useWine);
+    const orphan = await checkOrphan(result?.pid, useWine);
     if (orphan) {
-      return { ...check, ok: false, detail: orphan, artifact, run, useWine };
+      return { ...check, ok: false, detail: orphan, artifact, run, useWine, result };
     }
   }
 
-  return { ...check, artifact, run, useWine };
+  return { ...check, artifact, run, useWine, result };
+}
+
+async function pickWindowsInstallDir(context) {
+  if (process.platform !== 'win32') {
+    return join(context.tempRoot, 'installed');
+  }
+
+  const suffix = randomBytes(6).toString('hex');
+  const systemDrive = (process.env.SystemDrive || 'C:').replace(/[\\/]+$/, '');
+  const candidates = [
+    `${systemDrive}\\tpg-smoke-${suffix}`,
+    join(process.env.PUBLIC || 'C:\\Users\\Public', `tpg-smoke-${suffix}`),
+    join(tmpdir(), `tpg-smoke-${suffix}`),
+  ];
+
+  for (const candidate of candidates) {
+    if (/\s/.test(candidate)) continue;
+    try {
+      await mkdir(candidate, { recursive: true });
+      return candidate;
+    } catch {
+      // Try the next writable, space-free root.
+    }
+  }
+
+  throw new Error('Could not create a space-free install directory for NSIS /D.');
 }
 
 async function runWindowsInstaller(context, installer) {
@@ -723,7 +861,11 @@ async function runWindowsInstaller(context, installer) {
     throw new Error('Windows targets require Windows or --wine.');
   }
 
-  const installDir = join(context.tempRoot, 'installed');
+  const installDir = await pickWindowsInstallDir(context);
+  if (/\s/.test(installDir)) {
+    throw new Error(`NSIS /D requires a space-free install directory, received ${installDir}`);
+  }
+  context.cleanupDirs.push(installDir);
   await mkdir(installDir, { recursive: true });
 
   const installDirArg = useWine ? await toWinePath(installDir) : installDir;
@@ -804,11 +946,12 @@ async function runTarget(target) {
   const dataDir = join(tempRoot, 'data');
   await mkdir(dataDir, { recursive: true });
   currentDataDir = dataDir;
+  const cleanupDirs = [];
 
   let outcome;
   let cleanupError;
   try {
-    outcome = await target.run({ name: target.name, tempRoot, dataDir });
+    outcome = await target.run({ name: target.name, tempRoot, dataDir, cleanupDirs });
   } catch (error) {
     outcome = {
       ok: false,
@@ -821,10 +964,18 @@ async function runTarget(target) {
   } finally {
     currentDataDir = undefined;
     if (!options.keepTemp) {
+      for (const dir of cleanupDirs) {
+        try {
+          await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+
       try {
         await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       } catch (error) {
-        cleanupError = error;
+        cleanupError ??= error;
       }
     }
   }
@@ -859,6 +1010,7 @@ async function writeTargetLog(logPath, target, outcome, tempRoot, durationMs) {
     `ok: ${outcome.ok}`,
     `detail: ${outcome.detail}`,
     `successLine: ${outcome.successLine ?? '(none)'}`,
+    `result: ${outcome.result ? JSON.stringify(outcome.result) : '(none)'}`,
     '',
   ];
 
