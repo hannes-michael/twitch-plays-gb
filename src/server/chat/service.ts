@@ -14,6 +14,8 @@ export type ChatSourceSelector = (channel: string | null) => ChatSourceSelection
 export interface ChatServiceOptions {
   /** Chooses a source for an already-normalized channel or null. */
   selectSource?: ChatSourceSelector;
+  /** Injectable for focused transition tests; defaults to the real client. */
+  createTwitchSource?: (channel: string) => ChatSource;
 }
 
 export class ChatInputError extends Error {
@@ -35,42 +37,48 @@ export class ChatUnavailableError extends Error {
  * Source selection is supplied by the server mode policy; test/dev normally
  * starts the fake source, while production starts anonymous Twitch chat when a
  * channel is configured. Chat failures only affect status, never emulation.
+ *
+ * Source transitions are serialized and generation-tagged. A transition that
+ * was superseded while awaiting close/start aborts, so two overlapping channel
+ * changes can never leave the older Twitch client connected.
  */
 export class ChatService {
   private readonly logger: Logger;
   private readonly listeners = new Set<ChatMessageListener>();
   private readonly selectSource: ChatSourceSelector;
+  private readonly createTwitchSource: (channel: string) => ChatSource;
   private recent: ChatMessage[] = [];
   private source: ChatSource | null = null;
   private received = 0;
+  private transitionQueue: Promise<void> = Promise.resolve();
+  private generation = 0;
 
   constructor(logger: Logger, options: ChatServiceOptions = {}) {
     this.logger = logger;
     this.selectSource = options.selectSource ?? (() => 'none');
+    this.createTwitchSource =
+      options.createTwitchSource ?? ((channel) => new TwitchChatSource(channel, this.logger));
   }
 
   async applyChannel(channel: string | null): Promise<void> {
     const normalized = channel ? normalizeTwitchChannel(channel) : null;
     const selection = this.selectSource(normalized);
 
-    if (selection === 'fake') {
-      await this.startFake();
-      return;
-    }
-    if (selection === 'twitch' && normalized) {
-      await this.startTwitch(normalized);
-      return;
-    }
-    await this.close();
+    await this.enqueueTransition(async (generation) => {
+      if (selection === 'fake') {
+        await this.startFakeInternal(generation);
+        return;
+      }
+      if (selection === 'twitch' && normalized) {
+        await this.startTwitchInternal(normalized, generation);
+        return;
+      }
+      await this.closeSourceInternal();
+    });
   }
 
   async startFake(): Promise<void> {
-    if (this.source?.kind === 'fake' && this.source.connected) return;
-
-    await this.close();
-    const source = new FakeChatSource();
-    this.source = source;
-    await source.start((message) => this.record(message));
+    await this.enqueueTransition((generation) => this.startFakeInternal(generation));
   }
 
   async startTwitch(channel: string): Promise<void> {
@@ -80,34 +88,38 @@ export class ChatService {
       return;
     }
 
-    if (this.source?.kind === 'twitch' && this.source.channel === normalized) return;
-
-    await this.close();
-    const source = new TwitchChatSource(normalized, this.logger);
-    this.source = source;
-    await source.start((message) => this.record(message));
+    await this.enqueueTransition((generation) => this.startTwitchInternal(normalized, generation));
   }
 
   async setFakeOutage(outage: boolean): Promise<void> {
-    const source = this.source;
-    if (!(source instanceof FakeChatSource)) {
-      throw new ChatUnavailableError('Fake chat is not available');
-    }
+    await this.enqueueTransition(async (generation) => {
+      if (generation !== this.generation) return;
 
-    if (outage) {
-      source.stop();
-      this.logger.warn('fake chat source disconnected (test outage)');
-      return;
-    }
+      const source = this.source;
+      if (!source || source.kind !== 'fake') {
+        throw new ChatUnavailableError('Fake chat is not available');
+      }
 
-    await source.start((message) => this.record(message));
-    this.logger.info('fake chat source reconnected (test outage cleared)');
+      if (outage) {
+        await this.stopSource(source);
+        this.logger.warn('fake chat source disconnected (test outage)');
+        return;
+      }
+
+      await source.start((message) => this.record(message));
+      if (generation !== this.generation) {
+        if (this.source === source) this.source = null;
+        await this.stopSource(source);
+        return;
+      }
+      this.logger.info('fake chat source reconnected (test outage cleared)');
+    });
   }
 
   async close(): Promise<void> {
-    const source = this.source;
-    this.source = null;
-    if (source) await source.stop();
+    await this.enqueueTransition(async () => {
+      await this.closeSourceInternal();
+    });
   }
 
   getStatus(): ChatStatus {
@@ -151,6 +163,67 @@ export class ChatService {
     };
     source.inject(message);
     return message;
+  }
+
+  private enqueueTransition(operation: (generation: number) => Promise<void>): Promise<void> {
+    const generation = (this.generation += 1);
+    const run = this.transitionQueue.then(
+      () => operation(generation),
+      () => operation(generation),
+    );
+    this.transitionQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async startFakeInternal(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
+    if (this.source?.kind === 'fake' && this.source.connected) return;
+
+    await this.closeSourceInternal();
+    if (generation !== this.generation) return;
+
+    const source = new FakeChatSource();
+    this.source = source;
+    await source.start((message) => this.record(message));
+
+    if (generation !== this.generation) {
+      if (this.source === source) this.source = null;
+      await this.stopSource(source);
+    }
+  }
+
+  private async startTwitchInternal(channel: string, generation: number): Promise<void> {
+    if (generation !== this.generation) return;
+    if (this.source?.kind === 'twitch' && this.source.channel === channel) return;
+
+    await this.closeSourceInternal();
+    if (generation !== this.generation) return;
+
+    const source = this.createTwitchSource(channel);
+    this.source = source;
+    await source.start((message) => this.record(message));
+
+    if (generation !== this.generation) {
+      if (this.source === source) this.source = null;
+      await this.stopSource(source);
+    }
+  }
+
+  private async closeSourceInternal(): Promise<void> {
+    const source = this.source;
+    this.source = null;
+    if (source) await this.stopSource(source);
+  }
+
+  private async stopSource(source: ChatSource): Promise<void> {
+    try {
+      await source.stop();
+    } catch (error) {
+      this.logger.warn(`chat source stop failed: ${(error as Error).message}`);
+    }
   }
 
   private record(message: ChatMessage): void {

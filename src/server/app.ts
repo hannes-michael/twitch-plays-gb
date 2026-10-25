@@ -7,7 +7,11 @@ import { chatOutageRequestSchema } from '../shared/chat';
 import type { AppConfig } from '../shared/config';
 import type { DebugSnapshot } from '../shared/debug';
 import type { RomImportResponse, RomListResponse, RomResponse } from '../shared/roms';
-import { normalizeTwitchChannel, type EmulatorOperationResponse } from '../shared/settings';
+import {
+  normalizeTwitchChannel,
+  type EmulatorOperationResponse,
+  type SettingsResponse,
+} from '../shared/settings';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
 import type { EmulatorService, EmulatorStartOptions } from './emulator/service';
@@ -94,6 +98,22 @@ export async function createApp(
   const apiRouter = express.Router();
   const jsonBody = express.json({ limit: '8kb' });
 
+  // Settings saves and chat-source applies share one queue so overlapping
+  // requests cannot leave chat on an older channel than the persisted one.
+  let settingsUpdateQueue: Promise<void> = Promise.resolve();
+  const saveSettingsAndApply = (channel: string, romId: string): Promise<SettingsResponse> => {
+    const run = settingsUpdateQueue.then(async () => {
+      const saved = await settings.save(channel, romId);
+      await chat.applyChannel(saved.channel);
+      return saved;
+    });
+    settingsUpdateQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+
   const resolveRomStart = (
     romId: string | undefined,
   ): { options: EmulatorStartOptions } | { status: number; error: string } => {
@@ -172,8 +192,7 @@ export async function createApp(
         return;
       }
 
-      const saved = await settings.save(channel, romIdValue);
-      await chat.applyChannel(saved.channel);
+      const saved = await saveSettingsAndApply(channel, romIdValue);
       response.json(saved);
     } catch (error) {
       if (error instanceof SettingsValidationError) {

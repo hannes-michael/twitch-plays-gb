@@ -14,6 +14,23 @@ const BOT_USERNAMES = new Set([
   'sery_bot',
 ]);
 
+const BOT_BADGES = ['bot-badge', 'twitchbot'] as const;
+
+/**
+ * Twitch exposes verified bot status through the `bot-badge` badge (some
+ * historical/IRC payloads use `twitchbot`), not the generic `bot` key. Known
+ * chat-bot usernames are still filtered even when they carry no badge.
+ */
+export function isTwitchBot(
+  user: string,
+  badges: ReadonlyMap<string, string>,
+  userType?: string,
+): boolean {
+  if (BOT_USERNAMES.has(user.toLowerCase())) return true;
+  if (userType?.toLowerCase() === 'bot') return true;
+  return BOT_BADGES.some((badge) => badges.has(badge));
+}
+
 function errorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.slice(0, 300) || 'Twitch chat connection failed';
@@ -81,7 +98,7 @@ export class TwitchChatSource implements ChatSource {
         broadcaster: message.userInfo.isBroadcaster,
         mod: message.userInfo.isMod,
         vip: message.userInfo.isVip,
-        bot: BOT_USERNAMES.has(user.toLowerCase()) || message.userInfo.badges.has('bot'),
+        bot: isTwitchBot(user, message.userInfo.badges, message.userInfo.userType),
       };
 
       try {
