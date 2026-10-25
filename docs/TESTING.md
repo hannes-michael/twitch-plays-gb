@@ -128,7 +128,9 @@ launches Electron with **no** `TPG_SERVER_URL`, and proves the shell spawned
 `TPG_ROM` and asserts the resolved absolute path in the desktop log, then checks
 the setup screen, same-origin `/api/emulator/status` and `/health`, GB
 model/dimensions, growing video/audio counters, and that the child PID exits
-after `app.close()`.
+after `app.close()`. A second launch with `TPG_TEST=1` and short timing values
+asserts the shell forwards `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
+`TPG_RELEASE_FRAMES` to the spawned child (`/api/debug.timings`).
 `capture-window.electron.spec.ts` uses the external server fixture with
 `TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
 the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,
@@ -210,9 +212,10 @@ it does not use a UI-only bypass. Injected messages are also broadcast as
 `{ "type": "chat", "message": ... }` on `/ws`. Text is rendered as React text
 nodes, never HTML.
 
-Production mode does not start chat and returns JSON 404 for both routes. Use
-fake chat to drive anarchy/democracy scenarios deterministically later; do not
-mock the emulator.
+Production mode does not start chat and returns JSON 404 for both routes. Both
+routes also require a loopback peer, so binding to `0.0.0.0` does not expose
+debug state or injection to the LAN. Use fake chat to drive anarchy/democracy
+scenarios deterministically later; do not mock the emulator.
 
 `dev-panels.spec.ts` covers the panel metrics, fake source status, API and form
 injection, XSS escaping, WS broadcast, and malformed payload. It also checks the

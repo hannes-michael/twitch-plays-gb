@@ -34,6 +34,16 @@ function isPathWithin(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
+const LOOPBACK_PEER_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+function requireLoopbackPeer(request: Request, response: Response, next: NextFunction): void {
+  if (LOOPBACK_PEER_ADDRESSES.has(request.socket.remoteAddress ?? '')) {
+    next();
+    return;
+  }
+  response.status(403).json({ error: 'Developer endpoints are loopback-only' });
+}
+
 export async function createApp(
   config: AppConfig,
   state: ServerState,
@@ -74,7 +84,7 @@ export async function createApp(
   // Developer endpoints exist only in dev/test. Production falls through to the
   // JSON 404 below, so neither debug state nor chat injection is reachable.
   if (config.dev || config.test) {
-    apiRouter.get('/debug', (_request, response) => {
+    apiRouter.get('/debug', requireLoopbackPeer, (_request, response) => {
       const emulatorStatus = emulator.status();
       const snapshot: DebugSnapshot = {
         mode,
@@ -95,7 +105,7 @@ export async function createApp(
     });
 
     const jsonBody = express.json({ limit: '8kb' });
-    apiRouter.post('/test/chat', jsonBody, (request, response) => {
+    apiRouter.post('/test/chat', requireLoopbackPeer, jsonBody, (request, response) => {
       try {
         const message = chat.injectFakeMessage(request.body);
         response.status(201).json({ ok: true, message });

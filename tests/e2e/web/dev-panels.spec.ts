@@ -1,10 +1,20 @@
 import { once } from 'node:events';
+import { networkInterfaces } from 'node:os';
 import WebSocket from 'ws';
-import { test, expect } from '../../fixtures/server';
+import { startServer, test, expect } from '../../fixtures/server';
 
 interface ChatEvent {
   type: 'chat';
   message: { id: string; user: string; text: string };
+}
+
+function findNonLoopbackIPv4(): string | undefined {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) return entry.address;
+    }
+  }
+  return undefined;
 }
 
 test.describe('developer panels', () => {
@@ -101,6 +111,44 @@ test.describe('developer panels', () => {
       await expect(app.page.getByTestId('debug-chat-count')).toHaveText('2');
     } finally {
       socket.close();
+    }
+  });
+
+  test('rejects developer endpoints from non-loopback peers', async () => {
+    const address = findNonLoopbackIPv4();
+    if (!address) {
+      test.skip(true, 'No non-loopback IPv4 interface available');
+      return;
+    }
+
+    const server = await startServer({ host: '0.0.0.0' });
+    try {
+      const loopbackDebug = await fetch(`${server.baseURL}/api/debug`);
+      expect(loopbackDebug.status).toBe(200);
+
+      const port = new URL(server.baseURL).port;
+      const remoteBase = `http://${address}:${port}`;
+      const debug = await fetch(`${remoteBase}/api/debug`);
+      expect(debug.status).toBe(403);
+      expect(await debug.json()).toEqual({ error: 'Developer endpoints are loopback-only' });
+
+      const chat = await fetch(`${remoteBase}/api/test/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user: 'lan', text: 'should not inject' }),
+      });
+      expect(chat.status).toBe(403);
+      expect(await chat.json()).toEqual({ error: 'Developer endpoints are loopback-only' });
+
+      // The loopback path still works while the server is bound to 0.0.0.0.
+      const localChat = await fetch(`${server.baseURL}/api/test/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user: 'local', text: 'still works' }),
+      });
+      expect(localChat.status).toBe(201);
+    } finally {
+      await server.stop();
     }
   });
 });

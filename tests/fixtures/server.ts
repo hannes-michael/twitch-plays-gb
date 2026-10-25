@@ -28,6 +28,8 @@ export interface StartServerOptions {
   shutdownTimeoutMs?: number;
   /** Boot this ROM through the normal `--rom` configuration path. */
   rom?: string;
+  /** Bind address; tests can bind 0.0.0.0 and still connect through 127.0.0.1. */
+  host?: string;
   /** Extra environment values applied after the fixture's isolation defaults. */
   env?: NodeJS.ProcessEnv;
 }
@@ -263,7 +265,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   const stderrLog = createLogBuffer();
   const logs = (): string => formatLogs(stdoutLog, stderrLog);
 
-  const serverArgs = ['--host', '127.0.0.1', '--port', '0', '--data-dir', dataDir];
+  const serverArgs = ['--host', options.host ?? '127.0.0.1', '--port', '0', '--data-dir', dataDir];
   if (options.rom) {
     serverArgs.push('--rom', options.rom);
   }
@@ -377,7 +379,11 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
   });
 
   try {
-    const baseURL = await waitForUrl(urlPromise, logs);
+    const printedURL = new URL(await waitForUrl(urlPromise, logs));
+    // A wildcard bind prints 0.0.0.0; the fixture still talks to it through
+    // loopback so health checks work on every platform.
+    if (printedURL.hostname === '0.0.0.0') printedURL.hostname = '127.0.0.1';
+    const baseURL = printedURL.origin;
     await waitForHealth(baseURL, child, logs);
     startupCompleted = true;
     return {

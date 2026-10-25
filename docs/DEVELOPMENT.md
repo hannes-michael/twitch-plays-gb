@@ -379,6 +379,12 @@ text. Each injected message is also broadcast on `/ws` as
 message. Production mode starts no chat source and returns JSON 404 for
 `/api/debug` and `/api/test/chat`.
 
+Both developer routes also require a loopback peer
+(`127.0.0.1`, `::1`, or `::ffff:127.0.0.1`), regardless of the bind address.
+Binding the server to `0.0.0.0` still exposes the dashboard and `/health` on the
+LAN, but returns 403 for debug state and fake-chat injection from non-loopback
+clients.
+
 ### Chat timings
 
 These values are resolved through normal configuration (CLI, environment, JSON
@@ -392,6 +398,8 @@ consume them; nothing uses them for feature behavior yet.
 | Release frames   | `--release-frames <frames>`  | 4       | 1..600 frames |
 
 Environment equivalents: `TPG_DEMOCRACY_WINDOW_MS`, `TPG_HOLD_FRAMES`, and
-`TPG_RELEASE_FRAMES`. The hold/release defaults match node-mgba's input timing.
+`TPG_RELEASE_FRAMES`. The Electron shell forwards these three variables to its
+spawned server child, including packaged builds. The hold/release defaults match
+node-mgba's input timing.
 
 OBS setup documentation remains a manual checklist in `docs/OBS.md`.
