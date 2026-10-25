@@ -224,7 +224,14 @@ npm run smoke:packaged -- --linux
 npm run package:win
 npm run smoke:packaged -- --win          # Windows
 npm run smoke:packaged -- --win --wine   # best effort on Linux
+
+npm run bundle:linux                     # versioned output in release/<version>/
+npm run smoke:packaged -- --linux --release-dir release/<version>
 ```
+
+`npm run bundle`, `bundle:linux`, `bundle:win`, and `bundle:all` build without
+the E2E suite and keep each version's artifacts in `release/<version>/`. Use
+`--release-dir <path>` to point the smoke harness at a versioned directory.
 
 `scripts/smoke-packaged.mjs` launches each selected artifact with `--self-test`.
 Self-test mode is headless: no dashboard/capture windows, no menu, no dialogs.

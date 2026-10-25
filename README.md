@@ -127,19 +127,27 @@ configs, and troubleshooting.
 ## Packaged builds
 
 ```bash
-npm run package:linux    # AppImage + .deb in release/
-npm run package:win      # NSIS installer + portable .exe in release/
-npm run smoke:packaged -- --linux
+npm run bundle           # build + package for the host platform into release/<version>/
+npm run bundle:linux     # build + package AppImage + .deb into release/<version>/
+npm run bundle:win       # build + package NSIS + portable .exe into release/<version>/
+npm run bundle:all       # build + package Linux and Windows targets
+npm run smoke:packaged -- --linux --release-dir release/<version>
 ```
+
+`npm run bundle` builds without running the E2E suite and writes each version's
+artifacts to its own `release/<version>/` directory. Add `--skip-build` to reuse
+an existing `dist/`, or `--clean` to empty the version directory first. The
+older `package:linux`/`package:win` commands still write to `release/`.
 
 The packaged smoke test launches each artifact with `--self-test`, which runs
 the real Electron-as-Node server child without opening any windows. It checks
 the packaged SPA, `/overlay?client=obs`, and every referenced JS/CSS asset body,
 and with `TPG_ROM` set it waits for the native node-mgba worker's video/audio
 counters to grow at 48 kHz. On Linux it runs the AppImage and `.deb`; add
-`--unpacked` for a fast `release/linux-unpacked` check. Windows targets run on
-Windows, or with `--win --wine` as a best-effort local check. Release artifacts
-are not committed. See `docs/TESTING.md` for the full matrix and options.
+`--unpacked` for a fast `release/linux-unpacked` check. Point `--release-dir` at
+a versioned directory to test those artifacts. Windows targets run on Windows,
+or with `--win --wine` as a best-effort local check. Release artifacts are not
+committed. See `docs/TESTING.md` for the full matrix and options.
 
 ## Commands
 
@@ -158,6 +166,9 @@ npm run test:e2e:ui
 npm run test:e2e:headed
 npm run package:linux    # build Linux AppImage + .deb
 npm run package:win      # build Windows NSIS installer + portable .exe
+npm run bundle           # build + package for the host platform into release/<version>/
+npm run bundle:linux     # build + package Linux targets into release/<version>/
+npm run bundle:win       # build + package Windows targets into release/<version>/
 npm run smoke:packaged   # headless smoke test for packaged artifacts
 ```
 

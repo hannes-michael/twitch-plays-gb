@@ -32,6 +32,10 @@
     "test:e2e:install": "playwright install",
     "package:linux": "npm run build && electron-builder --linux --publish never",
     "package:win": "npm run build && electron-builder --win --publish never",
+    "bundle": "node scripts/package-release.mjs",
+    "bundle:linux": "node scripts/package-release.mjs --linux",
+    "bundle:win": "node scripts/package-release.mjs --win",
+    "bundle:all": "node scripts/package-release.mjs --all",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "start": "node dist/server/index.js"
   },

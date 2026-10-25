@@ -34,7 +34,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const releaseDir = join(repoRoot, 'release');
+let releaseDir = join(repoRoot, 'release');
 const romPath = join(repoRoot, 'tests', 'fixtures', 'roms', 'test_gb.gb');
 const logDir = join(repoRoot, 'test-results', 'packaged-smoke');
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -53,6 +53,7 @@ const options = {
   verbose: false,
   keepTemp: false,
   timeoutMs: DEFAULT_TIMEOUT_MS,
+  releaseDir: '',
 };
 
 let explicitTarget = false;
@@ -106,12 +107,26 @@ for (let index = 0; index < process.argv.length - 2; index += 1) {
     case '--keep-temp':
       options.keepTemp = true;
       break;
+    case '--release-dir': {
+      const value = process.argv[index + 3];
+      if (!value) {
+        console.error('Missing value for --release-dir. Usage: --release-dir <path>');
+        process.exit(2);
+      }
+      options.releaseDir = value;
+      index += 1;
+      break;
+    }
     case '--help':
     case '-h':
       printHelp();
       process.exit(0);
       break;
     default:
+      if (arg.startsWith('--release-dir=')) {
+        options.releaseDir = arg.slice('--release-dir='.length);
+        break;
+      }
       if (arg.startsWith('--timeout=')) {
         options.timeoutMs = parseTimeout(arg.slice('--timeout='.length));
         break;
@@ -125,6 +140,10 @@ for (let index = 0; index < process.argv.length - 2; index += 1) {
       printHelp();
       process.exit(2);
   }
+}
+
+if (options.releaseDir) {
+  releaseDir = resolve(repoRoot, options.releaseDir);
 }
 
 if (!explicitTarget) {
@@ -160,6 +179,7 @@ Options:
   --timeout <ms>    Per-target timeout (default ${DEFAULT_TIMEOUT_MS})
   --keep-temp       Keep temporary data/extraction directories
   --verbose         Stream app output while it runs
+  --release-dir <path>  Directory containing the packaged artifacts (default release/)
   -h, --help        Show this help
 `);
 }

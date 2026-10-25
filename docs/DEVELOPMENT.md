@@ -216,6 +216,9 @@ they are not playable games. See `NOTICE.md` there for licenses.
 | `npm run test:e2e:headed` | Playwright with visible browser/Electron windows                                      |
 | `npm run package:linux`   | Build, then run electron-builder for Linux (AppImage + .deb)                          |
 | `npm run package:win`     | Build, then run electron-builder for Windows (NSIS + portable)                        |
+| `npm run bundle`          | Build + package for the host platform into `release/<version>/` (no E2E)              |
+| `npm run bundle:linux`    | Build + package Linux targets into `release/<version>/` (no E2E)                      |
+| `npm run bundle:win`      | Build + package Windows targets into `release/<version>/` (no E2E)                    |
 | `npm run smoke:packaged`  | Headless smoke test for packaged artifacts (see `docs/TESTING.md`)                    |
 
 `dev:web` prints `TPG_URL=http://127.0.0.1:<port>` when the server is ready.
@@ -262,6 +265,14 @@ cannot require a GitHub token. The electron-builder config unpacks `dist/**`,
 `node_modules/**` so the spawned server entry can resolve bare imports and load
 `node-mgba`'s worker and native libraries outside the asar. `release/` is
 git-ignored; never commit build artifacts.
+
+For versioned release bundling without the E2E suite, use `npm run bundle`
+(host platform), `npm run bundle:linux`, `npm run bundle:win`, or
+`npm run bundle:all`. These write artifacts to `release/<version>/` so builds
+of different versions never mix. Add `--skip-build` to reuse `dist/`, or
+`--clean` to empty the version directory first. The smoke harness accepts
+`--release-dir <path>` so you can test a versioned directory:
+`npm run smoke:packaged -- --linux --release-dir release/0.1.1`.
 
 Every artifact is checked through the packaged app's headless self-test mode:
 
