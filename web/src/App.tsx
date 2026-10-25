@@ -159,13 +159,16 @@ export default function App() {
     statusEpoch.current += 1;
 
     try {
+      const romId = emulator.romId;
+      const requestBody =
+        nextOperation === 'stop' || romId === null ? undefined : JSON.stringify({ romId });
       const response = await fetch(`/api/emulator/${nextOperation}`, {
         method: 'POST',
         headers:
-          nextOperation === 'stop'
+          requestBody === undefined
             ? { accept: 'application/json' }
             : { 'content-type': 'application/json', accept: 'application/json' },
-        body: nextOperation === 'stop' ? undefined : JSON.stringify({ romId: settings.romId }),
+        body: requestBody,
       });
       const body = (await response.json().catch(() => null)) as
         (EmulatorOperationResponse & { error?: string }) | null;
