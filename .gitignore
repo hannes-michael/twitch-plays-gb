@@ -1,0 +1,47 @@
+# Local planning (not committed)
+/PLAN.md
+/plan.md
+/*.plan.md
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+out/
+release/
+build/artifacts/
+server-runtime/
+*.tsbuildinfo
+.vite/
+
+# Test artifacts
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Runtime data, ROMs, and saves
+data/
+logs/
+*.log
+*.sav
+*.ss0
+*.state
+*.srm
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+.opencode/
