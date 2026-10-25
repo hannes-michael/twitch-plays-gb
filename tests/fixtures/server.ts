@@ -109,6 +109,20 @@ function formatLogs(stdout: LogBuffer, stderr: LogBuffer): string {
   return sections.length > 0 ? sections.join('\n') : '(no server output captured)';
 }
 
+/**
+ * Checks whether the OS process still exists. On Windows the child can be gone
+ * before Node delivers its 'exit' event, so child.exitCode alone is not enough
+ * to tell whether the server died before teardown started.
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 function waitForExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -346,7 +360,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     const exitedBeforeStop =
       child.exitCode !== null || child.signalCode !== null
         ? { code: child.exitCode, signal: child.signalCode }
-        : undefined;
+        : child.pid !== undefined && !isProcessRunning(child.pid)
+          ? { code: null, signal: null }
+          : undefined;
     stopRequested = true;
     process.removeListener('exit', onParentExit);
     flushBuffer(stdoutLog);
@@ -373,7 +389,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     if (startupCompleted) {
       const exit = unexpectedExit ?? exitedBeforeStop;
       if (exit !== undefined) {
-        const detail = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? 'unknown'}`;
+        const signal = exit.signal ?? child.signalCode;
+        const code = exit.code ?? child.exitCode;
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
         throw new Error(`Server exited unexpectedly with ${detail} during the test.\n${logs()}`);
       }
     }
