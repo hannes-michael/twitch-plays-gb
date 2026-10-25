@@ -102,8 +102,53 @@ the server is not reachable. Point it at another server with
 `TPG_SERVER_URL=http://127.0.0.1:3001` (PowerShell:
 `$env:TPG_SERVER_URL = 'http://127.0.0.1:3001'`).
 
-Packaging commands are scaffolding for the later packaged-app milestones
-(P0-27/P0-28). The desktop shell currently expects a separately running server.
+When `TPG_SERVER_URL` is unset, the desktop shell spawns the built server itself
+instead of expecting an external one. From a source checkout:
+
+```bash
+npm run build
+node_modules/.bin/electron . \
+  --user-data-dir="$PWD/data/dev/electron" \
+  --no-sandbox
+```
+
+The child runs `dist/server/index.js` through the Electron binary with
+`ELECTRON_RUN_AS_NODE=1`, binds a random loopback port, and prints
+`[desktop] server child ready at http://127.0.0.1:<port> (pid ...)` plus
+`[server]` prefixed output. Quit Electron normally; it stops the child and
+escalates to SIGKILL if the child does not exit within 5 seconds. Use
+`TPG_DATA_DIR` to isolate its data directory and `TPG_ROM` to boot a ROM. The
+one-command dev workflow still runs an external server and points Electron at it
+with `TPG_SERVER_URL`, so it does not use the spawn path.
+
+Packaging is still P0-28. The electron-builder config now unpacks `dist/**`,
+`package.json`, and runtime `node_modules/**` so the spawned server entry can
+resolve bare imports and load `node-mgba`'s worker and native libraries outside
+the asar. No packaged artifact is built or validated in this cycle.
+
+## Capture window
+
+Open the dedicated OBS capture window with **Window → Open Capture Window**
+(`Ctrl+Shift+C`) or at startup:
+
+```bash
+TPG_CAPTURE=1 npm run dev
+```
+
+PowerShell:
+
+```powershell
+$env:TPG_CAPTURE = '1'; npm run dev
+```
+
+The window is 960 × 540, resizable, black, and keeps the title
+**Twitch Plays GB Capture** regardless of page-title changes. It loads
+`/overlay?client=capture` and uses Electron's
+`autoplayPolicy: 'no-user-gesture-required'`. The overlay still starts muted;
+click **Unmute audio** in the capture window once. Closing it leaves the
+dashboard open. Bounds persistence and tray integration are later P1 work. See
+`docs/OBS.md` for OBS Window/Application Capture steps and the unexecuted manual
+checklist.
 
 ## Data directories
 
@@ -124,6 +169,11 @@ The JSON config file is `<dataDir>/config.json` unless `--config` or
 profile in `data/dev/electron` (and the Electron E2E test uses the fixture's
 temporary directory), so development and tests do not write to the real
 Electron profile.
+
+When the desktop shell spawns its own server, it passes `TPG_DATA_DIR` if set,
+otherwise the server gets Electron's `userData` directory. In `TPG_DEV=1` mode
+the fallback is `<repository>/data/dev`. If `TPG_SERVER_URL` is set, the shell
+does not spawn a server and does not own the external server's data directory.
 
 `data/` is git-ignored. To reset development state, stop the dev command and
 remove the directory:

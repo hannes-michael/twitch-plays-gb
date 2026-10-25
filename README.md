@@ -6,10 +6,11 @@ captures either the built-in Browser Source overlay or a dedicated capture
 window.
 
 > Status: walking skeleton. The config-driven server, first-run UI, Electron
-> shell, one-command dev workflow, and local GB/GBC/GBA video/audio overlay are
-> runnable. Twitch, OBS setup docs, and packaging integration are planned. See
-> `PLAN.md` for the local implementation roadmap (not committed) and
-> `docs/TESTING.md` for the E2E-first workflow.
+> shell (including a spawned server child and OBS capture window), one-command
+> dev workflow, local GB/GBC/GBA video/audio overlay, and OBS setup guide are
+> runnable. Twitch chat and packaged-app validation are planned. See `PLAN.md`
+> for the local implementation roadmap (not committed) and `docs/TESTING.md`
+> for the E2E-first workflow.
 
 ## Requirements
 
@@ -51,8 +52,16 @@ To launch the desktop shell against an already-running server:
 npm run dev:electron
 ```
 
-The Electron shell loads `TPG_SERVER_URL` (default
-`http://127.0.0.1:3000`). It only accepts loopback URLs. See
+The Electron shell loads `TPG_SERVER_URL` when it is set and only accepts
+loopback URLs. With no `TPG_SERVER_URL`, it spawns the built server itself
+through Electron-as-Node and binds a random loopback port. Open the OBS capture
+window with **Window → Open Capture Window** or:
+
+```bash
+TPG_CAPTURE=1 npm run dev
+```
+
+See `docs/OBS.md` for Browser Source and Window Capture steps and
 `docs/DEVELOPMENT.md` for the dev workflow, data directories, VS Code launch
 configs, and troubleshooting.
 
@@ -86,10 +95,11 @@ for now. See `.env.example`.
 
 - `docs/DEVELOPMENT.md` — dev commands, data directories, VS Code, troubleshooting
 - `docs/TESTING.md` — E2E-first workflow, fixtures, Electron tests
+- `docs/OBS.md` — Browser Source and capture window setup, audio checklist (manual, pending)
 - `docs/DECISIONS.md` — architecture decisions and spike outcomes
 
-OBS setup (`docs/OBS.md`) and the fake chat/debug panels are planned but not
-written yet.
+OBS manual verification is still pending, and the fake chat/debug panels are
+planned but not written yet.
 
 ## Legal
 

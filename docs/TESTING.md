@@ -107,17 +107,29 @@ tested by accident.
 Electron tests live in `tests/e2e/electron` and use Playwright's `_electron`
 launcher against the real desktop bundle in `dist/desktop`. The spec builds that
 bundle in `beforeAll`, starts the real server through the `server` fixture, and
-passes its random-port URL to Electron:
+passes its random-port URL to Electron. Always build the launch environment with
+`createElectronEnv` so a developer's `TPG_*`, `HOST`, `PORT`, or `NODE_OPTIONS`
+values cannot leak into the scenario:
 
 ```ts
 const app = await electron.launch({
   args: [`--user-data-dir=${join(server.dataDir, 'electron-profile')}`, repoRoot],
-  env: { ...process.env, TPG_SERVER_URL: server.baseURL },
+  env: createElectronEnv({ TPG_SERVER_URL: server.baseURL }),
 });
 const page = await app.firstWindow();
 await expect(page).toHaveTitle('Twitch Plays GB');
 await expect(page.getByTestId('server-status-label')).toHaveText('online');
 ```
+
+`server-child.electron.spec.ts` builds web, server, and desktop in `beforeAll`,
+launches Electron with **no** `TPG_SERVER_URL`, and proves the shell spawned
+`dist/server/index.js` through Electron-as-Node. It checks the setup screen,
+same-origin `/api/emulator/status` and `/health`, GB model/dimensions, growing
+video/audio counters, and that the child PID exits after `app.close()`.
+`capture-window.electron.spec.ts` uses the external server fixture with
+`TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
+the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,
+audio unlock, and reopening from the application menu.
 
 Electron needs a display. On Linux CI this suite runs under
 `xvfb-run -a`. The launch adds `--no-sandbox` only when `CI` is set; production
@@ -139,8 +151,9 @@ On failure Playwright retains a trace, video, and screenshot. Open a trace with:
 npx playwright show-trace test-results/<test>/trace.zip
 ```
 
-## OBS (planned)
+## OBS (manual, pending)
 
-OBS itself is not automated. The `docs/OBS.md` manual checklist is planned but
-does not exist yet. Once written, keep it up to date and run it on Linux and
-Windows before a release.
+OBS itself is not automated. `docs/OBS.md` documents Browser Source and capture
+window setup, audio/autoplay workarounds, and a manual checklist. OBS was not
+installed in the environment where the P0-25/P0-26 work was implemented, so the
+checklist is **not yet executed**. Run it on Linux and Windows before a release.
