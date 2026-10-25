@@ -16,6 +16,7 @@ export interface EmulatorRomStatus {
 
 export interface EmulatorStatus {
   status: EmulatorLifecycleStatus;
+  romId: string | null;
   rom: EmulatorRomStatus | null;
   fps: number;
   videoFrames: number;
@@ -29,6 +30,7 @@ export interface EmulatorStatus {
 export function createStoppedEmulatorStatus(): EmulatorStatus {
   return {
     status: 'stopped',
+    romId: null,
     rom: null,
     fps: 0,
     videoFrames: 0,

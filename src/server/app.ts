@@ -5,10 +5,15 @@ import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { AppConfig } from '../shared/config';
 import type { DebugSnapshot } from '../shared/debug';
+import type { RomImportResponse, RomListResponse, RomResponse } from '../shared/roms';
+import { normalizeTwitchChannel, type EmulatorOperationResponse } from '../shared/settings';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
-import type { EmulatorService } from './emulator/service';
+import type { EmulatorService, EmulatorStartOptions } from './emulator/service';
 import { ChatInputError, ChatUnavailableError, type ChatService } from './chat/service';
+import type { RomStore } from './roms/store';
+import { RomImportError } from './roms/store';
+import { SettingsValidationError, type SettingsStore } from './settings';
 import { VITE_HMR_PATH } from './upgrade-paths';
 import { readPackageVersion } from './version';
 
@@ -44,12 +49,20 @@ function requireLoopbackPeer(request: Request, response: Response, next: NextFun
   response.status(403).json({ error: 'Developer endpoints are loopback-only' });
 }
 
+function bodyObject(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 export async function createApp(
   config: AppConfig,
   state: ServerState,
   logger: Logger,
   httpServer: HttpServer,
   emulator: EmulatorService,
+  roms: RomStore,
+  settings: SettingsStore,
   chat: ChatService,
 ): Promise<AppContext> {
   const app = express();
@@ -76,9 +89,183 @@ export async function createApp(
   // cannot be shadowed by it. The router is mounted before Vite/static so the
   // embedded Vite middleware never proxies API traffic.
   const apiRouter = express.Router();
+  const jsonBody = express.json({ limit: '8kb' });
+
+  const resolveRomStart = (
+    romId: string | undefined,
+  ): { options: EmulatorStartOptions } | { status: number; error: string } => {
+    if (!romId) return { status: 400, error: 'No ROM selected' };
+
+    const rom = roms.get(romId);
+    const romPath = roms.getPath(romId);
+    if (!rom || !romPath) return { status: 404, error: 'Unknown ROM' };
+
+    return {
+      options: {
+        romPath,
+        romId,
+        batterySavePath: join(config.dataDir, 'saves', `${romId}.sav`),
+      },
+    };
+  };
+
   apiRouter.get('/emulator/status', (_request, response) => {
     response.set('Cache-Control', 'no-store');
     response.json(emulator.status());
+  });
+
+  apiRouter.get('/settings', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json(settings.get());
+  });
+
+  apiRouter.post('/settings', jsonBody, async (request, response, next) => {
+    try {
+      const body = bodyObject(request.body);
+      const channelValue = body.channel;
+      const romIdValue = body.romId;
+
+      if (typeof channelValue !== 'string') {
+        response.status(400).json({ error: 'Invalid Twitch channel' });
+        return;
+      }
+
+      const channel = normalizeTwitchChannel(channelValue);
+      if (!channel) {
+        response.status(400).json({ error: 'Invalid Twitch channel' });
+        return;
+      }
+
+      if (typeof romIdValue !== 'string') {
+        response.status(400).json({ error: 'ROM is required' });
+        return;
+      }
+
+      if (!roms.get(romIdValue)) {
+        response.status(404).json({ error: 'Unknown ROM' });
+        return;
+      }
+
+      response.json(await settings.save(channel, romIdValue));
+    } catch (error) {
+      if (error instanceof SettingsValidationError) {
+        response.status(400).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  apiRouter.get('/roms', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    const body: RomListResponse = { roms: roms.list() };
+    response.json(body);
+  });
+
+  apiRouter.get('/roms/:id', (request, response) => {
+    const rom = roms.get(request.params.id);
+    if (!rom) {
+      response.status(404).json({ error: 'Unknown ROM' });
+      return;
+    }
+
+    response.set('Cache-Control', 'no-store');
+    const body: RomResponse = { rom };
+    response.json(body);
+  });
+
+  apiRouter.post(
+    '/roms',
+    express.raw({ type: 'application/octet-stream', limit: '32mb' }),
+    async (request, response, next) => {
+      try {
+        const filename = request.get('x-filename');
+        if (!filename) {
+          response.status(400).json({ error: 'Missing x-filename header' });
+          return;
+        }
+
+        if (!Buffer.isBuffer(request.body)) {
+          response.status(400).json({ error: 'Send ROM bytes as application/octet-stream' });
+          return;
+        }
+
+        const result = await roms.importRom(request.body, filename);
+        const body: RomImportResponse = result;
+        response.status(result.created ? 201 : 200).json(body);
+      } catch (error) {
+        if (error instanceof RomImportError) {
+          response.status(error.statusCode).json({ error: error.message });
+          return;
+        }
+        next(error);
+      }
+    },
+  );
+
+  apiRouter.post('/emulator/start', jsonBody, async (request, response, next) => {
+    try {
+      const body = bodyObject(request.body);
+      if (body.romId !== undefined && typeof body.romId !== 'string') {
+        response.status(400).json({ error: 'Invalid ROM id' });
+        return;
+      }
+
+      const romId =
+        (typeof body.romId === 'string' ? body.romId : undefined) ??
+        settings.getRomId() ??
+        undefined;
+      const resolved = resolveRomStart(romId);
+      if ('error' in resolved) {
+        response.status(resolved.status).json({ error: resolved.error });
+        return;
+      }
+
+      await emulator.start(resolved.options);
+      // A failed boot is a status, not a transport failure: the UI needs the
+      // error text and the server must stay up so the user can pick another ROM.
+      const payload: EmulatorOperationResponse = { status: emulator.status() };
+      response.json(payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  apiRouter.post('/emulator/stop', async (_request, response, next) => {
+    try {
+      await emulator.stop();
+      const payload: EmulatorOperationResponse = { status: emulator.status() };
+      response.json(payload);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  apiRouter.post('/emulator/restart', jsonBody, async (request, response, next) => {
+    try {
+      const body = bodyObject(request.body);
+      if (body.romId !== undefined && typeof body.romId !== 'string') {
+        response.status(400).json({ error: 'Invalid ROM id' });
+        return;
+      }
+
+      const romId =
+        (typeof body.romId === 'string' ? body.romId : undefined) ??
+        emulator.status().romId ??
+        settings.getRomId() ??
+        undefined;
+      const resolved = resolveRomStart(romId);
+      if ('error' in resolved) {
+        response.status(resolved.status).json({ error: resolved.error });
+        return;
+      }
+
+      await emulator.restart(resolved.options);
+      const payload: EmulatorOperationResponse = { status: emulator.status() };
+      response.json(payload);
+    } catch (error) {
+      next(error);
+    }
   });
 
   // Developer endpoints exist only in dev/test. Production falls through to the
@@ -104,7 +291,6 @@ export async function createApp(
       response.json(snapshot);
     });
 
-    const jsonBody = express.json({ limit: '8kb' });
     apiRouter.post('/test/chat', requireLoopbackPeer, jsonBody, (request, response) => {
       try {
         const message = chat.injectFakeMessage(request.body);

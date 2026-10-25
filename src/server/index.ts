@@ -1,10 +1,14 @@
 import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
 import { ChatService } from './chat/service';
+import { ensureDataLayout, type DataLayout } from './data-dirs';
 import { EmulatorService } from './emulator/service';
 import { createLogger } from './logger';
+import { RomStore } from './roms/store';
+import { SettingsStore } from './settings';
 import { createServerState } from './state';
 import { VITE_HMR_PATH } from './upgrade-paths';
 import { createWebSocketServer } from './ws';
@@ -40,6 +44,26 @@ async function main(): Promise<void> {
     return;
   }
 
+  let layout: DataLayout;
+  try {
+    layout = ensureDataLayout(config.dataDir);
+  } catch (error) {
+    logger.error(`Could not create data subdirectories: ${(error as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const roms = new RomStore(config.dataDir);
+  const settings = new SettingsStore(config.dataDir, logger);
+  try {
+    await roms.init();
+    await settings.init();
+  } catch (error) {
+    logger.error(`Could not load persisted data: ${(error as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
+
   logger.debug(
     `configuration: host=${config.host} port=${config.port} dataDir=${config.dataDir} ` +
       `dev=${config.dev} test=${config.test} logLevel=${config.logLevel}`,
@@ -62,7 +86,7 @@ async function main(): Promise<void> {
   let appContext;
 
   try {
-    appContext = await createApp(config, state, logger, httpServer, emulator, chat);
+    appContext = await createApp(config, state, logger, httpServer, emulator, roms, settings, chat);
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
     process.exitCode = 1;
@@ -112,6 +136,29 @@ async function main(): Promise<void> {
       });
   });
 
+  const startSelectedRom = async (): Promise<void> => {
+    // Explicit --rom configuration always wins over the persisted choice.
+    if (config.rom) {
+      await emulator.start({ romPath: config.rom, romId: null });
+      return;
+    }
+
+    const romId = settings.getRomId();
+    if (!romId) return;
+
+    const romPath = roms.getPath(romId);
+    if (!romPath) {
+      logger.warn('saved ROM is not in the ROM library; emulator not started');
+      return;
+    }
+
+    await emulator.start({
+      romPath,
+      romId,
+      batterySavePath: join(layout.savesDir, `${romId}.sav`),
+    });
+  };
+
   httpServer.listen(config.port, config.host, () => {
     const address = httpServer.address();
     const actualPort = typeof address === 'object' && address !== null ? address.port : config.port;
@@ -121,9 +168,9 @@ async function main(): Promise<void> {
 
     // Start after listening so /health is available while the ROM boots. A
     // failed boot is reported through status/state instead of crashing.
-    if (config.rom) {
-      void emulator.start(config.rom);
-    }
+    void startSelectedRom().catch((error: unknown) => {
+      logger.error(`Failed to start configured ROM: ${(error as Error).message}`);
+    });
   });
 
   let shuttingDown = false;
