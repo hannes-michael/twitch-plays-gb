@@ -163,6 +163,26 @@ test.describe('server fixture', () => {
     }
   });
 
+  test('parses short chat timings from the environment into debug output', async () => {
+    const server = await startServer({
+      env: {
+        TPG_DEMOCRACY_WINDOW_MS: '750',
+        TPG_HOLD_FRAMES: '2',
+        TPG_RELEASE_FRAMES: '1',
+      },
+    });
+
+    try {
+      const response = await fetch(`${server.baseURL}/api/debug`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        timings: { democracyWindowMs: 750, holdFrames: 2, releaseFrames: 1 },
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('fails teardown when SIGKILL escalation is required', async () => {
     test.skip(process.platform !== 'linux', 'procfs stopped-state check is Linux-only');
 

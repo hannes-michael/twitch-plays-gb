@@ -46,6 +46,20 @@ test.describe('production server', () => {
       expect(apiHtml.status).toBe(404);
       expect(apiHtml.headers.get('content-type')).toContain('application/json');
 
+      // Developer endpoints are dev/test-only; production must never expose
+      // debug state or a fake-chat injection path.
+      const debug = await fetch(`${server.baseURL}/api/debug`);
+      expect(debug.status).toBe(404);
+      expect(await debug.json()).toEqual({ error: 'Not found' });
+
+      const testChat = await fetch(`${server.baseURL}/api/test/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ user: 'dev', text: 'production must reject this' }),
+      });
+      expect(testChat.status).toBe(404);
+      expect(await testChat.json()).toEqual({ error: 'Not found' });
+
       const missingAsset = await fetch(`${server.baseURL}/assets/missing.js`, {
         headers: { accept: '*/*' },
       });

@@ -28,6 +28,8 @@ export interface StartServerOptions {
   shutdownTimeoutMs?: number;
   /** Boot this ROM through the normal `--rom` configuration path. */
   rom?: string;
+  /** Extra environment values applied after the fixture's isolation defaults. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ServerFixture {
@@ -222,7 +224,11 @@ export function createElectronEnv(
   return env;
 }
 
-function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEnv {
+function createServerEnv(
+  dataDir: string,
+  production: boolean,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
   // Developer environment must not leak into the fixture. In particular, a
   // TPG_CONFIG pointing at a missing file would now be a hard config error.
   return {
@@ -232,6 +238,7 @@ function createServerEnv(dataDir: string, production: boolean): NodeJS.ProcessEn
     TPG_DATA_DIR: dataDir,
     TPG_LOG_LEVEL: 'debug',
     FORCE_COLOR: '0',
+    ...overrides,
   };
 }
 
@@ -269,7 +276,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     child = spawn(process.execPath, commandArgs, {
       cwd: repoRoot,
       detached: process.platform !== 'win32',
-      env: createServerEnv(dataDir, production),
+      env: createServerEnv(dataDir, production, options.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
