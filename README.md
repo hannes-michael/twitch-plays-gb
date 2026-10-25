@@ -5,17 +5,17 @@ streaming. The app runs an Electron desktop shell and a local server; OBS
 captures either the built-in Browser Source overlay or a dedicated capture
 window.
 
-> Status: walking skeleton plus first-run setup. The config-driven server,
-> validated ROM import, first-run wizard, dashboard lifecycle controls,
+> Status: MVP core. The config-driven server, validated ROM import, first-run
+> wizard, dashboard lifecycle controls, anonymous read-only Twitch chat with an
+> anarchy input queue, local GB/GBC/GBA video/audio overlay, autosave/restore,
 > Electron shell (including a spawned server child and OBS capture window),
-> one-command dev workflow, local GB/GBC/GBA video/audio overlay,
-> developer-only fake chat/debug panel, OBS setup guide, and Linux
-> AppImage/.deb builds are runnable. Linux packaged builds pass a headless
-> smoke test; Windows packaging is wired for CI but has not been executed in
-> the development environment. Twitch chat and input queues are planned, and
-> OBS capture is still a manual checklist. See `PLAN.md` for the local
-> implementation roadmap (not committed) and `docs/TESTING.md` for the
-> E2E-first workflow.
+> one-command dev workflow, developer-only fake chat/debug panel, OBS setup
+> guide, and Linux AppImage/.deb builds are runnable. Linux packaged builds pass
+> a headless smoke test; Windows packaging is wired for CI but has not been
+> executed in the development environment. Democracy mode, mode switching,
+> pause/resume, tray/bounds polish, and the manual OBS checks remain. See
+> `PLAN.md` for the local implementation roadmap (not committed) and
+> `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
@@ -51,6 +51,34 @@ npm run dev:web
 ```
 
 Open the printed URL in your browser.
+
+## Chat input
+
+Production connects anonymously (read-only) to the configured Twitch channel.
+Development and tests use a fake chat source; use the developer panel or the
+test-only injection endpoint to send commands. The default anarchy mode accepts
+FIFO commands with per-user cooldowns, a global rate cap, queue limits, and
+stale-command drops:
+
+```text
+!up  !down  !left  !right  !a  !b  !start  !select  !l  !r
+```
+
+Aliases such as `!u`, `!d`, `!st`, and `!sel` are accepted. Bare commands
+(without `!`) are opt-in via `TPG_BARE_COMMANDS=1`. Broadcasters and moderators
+can use `!save` to write a save state; other chat messages are ignored for that
+command. Bots and the broadcaster’s own bot messages are filtered. See
+`docs/DEVELOPMENT.md` for timings and the fake-chat API.
+
+## Saves
+
+State is autosaved every 60 seconds by default (configurable with
+`TPG_AUTOSAVE_INTERVAL_MS`), on Stop/Restart, before ROM changes, on quit, and
+via the dashboard **Save now** button. Two generations are kept atomically
+(`<key>.state` and `<key>.state.prev`); the newest valid state is restored on
+boot, with fallback to the previous generation if the current file is corrupt.
+Battery-backed SRAM is flushed to `<dataDir>/saves/<key>.sav` on stop/quit when
+the cartridge supports it. See `docs/DEVELOPMENT.md` for the data layout.
 
 ## Build and run
 
