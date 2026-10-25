@@ -19,6 +19,8 @@ export interface TestServer {
   readonly exitCode: number | null;
   getLogs(): string;
   stop(): Promise<void>;
+  /** Simulate a crash: SIGKILL the server and keep its data directory intact. */
+  crash(): Promise<void>;
 }
 
 export interface StartServerOptions {
@@ -377,6 +379,22 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
     }
   };
 
+  const crash = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    stopRequested = true;
+    process.removeListener('exit', onParentExit);
+    flushBuffer(stdoutLog);
+    flushBuffer(stderrLog);
+
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+      killProcessTree(child, 'SIGKILL');
+      await waitForExit(child, 1_000);
+    }
+    // Deliberately keep the data directory so the test can inspect a crashed
+    // on-disk state and start a new server against it.
+  };
+
   stdout.on('data', (chunk: Buffer | string) => {
     appendChunk(stdoutLog, chunk, (line) => {
       const match = /^TPG_URL=(.+)$/.exec(line);
@@ -420,6 +438,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Tes
       },
       getLogs: logs,
       stop,
+      crash,
     };
   } catch (error) {
     await stop();
