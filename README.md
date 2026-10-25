@@ -180,6 +180,10 @@ chat source until a channel is configured; use the dashboard's Developer panel
 and `POST /api/test/chat` to inject messages without Twitch (see
 `docs/DEVELOPMENT.md`). Tests never contact Twitch.
 
+## Questions
+
+If you have questions, feel free to contact me on Discord as **zhorky**.
+
 ## Legal
 
 This project does not include or distribute commercial ROMs. You must supply
