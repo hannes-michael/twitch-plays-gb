@@ -2,11 +2,13 @@ import { existsSync } from 'node:fs';
 import type { Server as HttpServer } from 'node:http';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import express, { type Express } from 'express';
+import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { AppConfig } from '../shared/config';
+import type { DebugSnapshot } from '../shared/debug';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
 import type { EmulatorService } from './emulator/service';
+import { ChatInputError, ChatUnavailableError, type ChatService } from './chat/service';
 import { VITE_HMR_PATH } from './upgrade-paths';
 import { readPackageVersion } from './version';
 
@@ -38,6 +40,7 @@ export async function createApp(
   logger: Logger,
   httpServer: HttpServer,
   emulator: EmulatorService,
+  chat: ChatService,
 ): Promise<AppContext> {
   const app = express();
   app.disable('x-powered-by');
@@ -45,12 +48,15 @@ export async function createApp(
   const version = readPackageVersion();
   const startedAt = Date.now();
 
+  const mode = config.test ? 'test' : config.dev ? 'dev' : 'production';
+
   app.get('/health', (_request, response) => {
     response.set('Cache-Control', 'no-store');
     response.json({
       status: 'ok',
       version,
       uptime: Math.floor((Date.now() - startedAt) / 1000),
+      mode,
       emulator: state.emulator,
       clients: { total: state.clients },
     });
@@ -64,6 +70,62 @@ export async function createApp(
     response.set('Cache-Control', 'no-store');
     response.json(emulator.status());
   });
+
+  // Developer endpoints exist only in dev/test. Production falls through to the
+  // JSON 404 below, so neither debug state nor chat injection is reachable.
+  if (config.dev || config.test) {
+    apiRouter.get('/debug', (_request, response) => {
+      const emulatorStatus = emulator.status();
+      const snapshot: DebugSnapshot = {
+        mode,
+        timings: config.timings,
+        emulator: emulatorStatus,
+        chat: { ...chat.getStatus(), recent: chat.getRecent() },
+        clients: { total: state.clients },
+        media: {
+          videoFrames: emulatorStatus.videoFrames,
+          audioChunks: emulatorStatus.audioChunks,
+          fps: emulatorStatus.fps,
+          audioSampleRate: emulatorStatus.audioSampleRate,
+        },
+        queue: { length: 0, votes: 0 },
+      };
+      response.set('Cache-Control', 'no-store');
+      response.json(snapshot);
+    });
+
+    const jsonBody = express.json({ limit: '8kb' });
+    apiRouter.post('/test/chat', jsonBody, (request, response) => {
+      try {
+        const message = chat.injectFakeMessage(request.body);
+        response.status(201).json({ ok: true, message });
+      } catch (error) {
+        if (error instanceof ChatInputError) {
+          response.status(400).json({ error: error.message });
+          return;
+        }
+        if (error instanceof ChatUnavailableError) {
+          response.status(503).json({ error: error.message });
+          return;
+        }
+        throw error;
+      }
+    });
+  }
+
+  apiRouter.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    const bodyError = error as { type?: string };
+    if (bodyError.type === 'entity.parse.failed') {
+      response.status(400).json({ error: 'Invalid JSON body' });
+      return;
+    }
+    if (bodyError.type === 'entity.too.large') {
+      response.status(413).json({ error: 'Request body too large' });
+      return;
+    }
+    response.status(500).json({ error: 'Internal server error' });
+  });
+
   apiRouter.use((_request, response) => {
     response.status(404).json({ error: 'Not found' });
   });

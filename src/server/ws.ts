@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import WebSocket, { WebSocketServer } from 'ws';
 import { MEDIA_PROTOCOL_VERSION } from '../shared/media-protocol';
+import type { ChatService } from './chat/service';
 import type { EmulatorService } from './emulator/service';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
@@ -13,6 +14,8 @@ export interface WebSocketServerOptions {
   passThroughPaths?: readonly string[];
   /** Emulator status source and binary media hub. */
   emulator: EmulatorService;
+  /** Chat status and text-message broadcast source. */
+  chat: ChatService;
 }
 
 function rejectUpgrade(socket: Duplex): void {
@@ -67,17 +70,25 @@ export function createWebSocketServer(
     rejectUpgrade(socket);
   };
 
-  httpServer.on('upgrade', handleUpgrade);
-  wss.on('close', () => {
-    unsubscribe();
-    httpServer.off('upgrade', handleUpgrade);
-  });
-
-  const unsubscribe = options.emulator.onStatusChange((emulatorStatus) => {
-    const message = JSON.stringify({ type: 'state', emulator: emulatorStatus });
+  const broadcast = (payload: unknown): void => {
+    const message = JSON.stringify(payload);
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) client.send(message);
     }
+  };
+
+  const unsubscribeEmulator = options.emulator.onStatusChange((emulatorStatus) => {
+    broadcast({ type: 'state', emulator: emulatorStatus });
+  });
+  const unsubscribeChat = options.chat.subscribe((message) => {
+    broadcast({ type: 'chat', message });
+  });
+
+  httpServer.on('upgrade', handleUpgrade);
+  wss.on('close', () => {
+    unsubscribeEmulator();
+    unsubscribeChat();
+    httpServer.off('upgrade', handleUpgrade);
   });
 
   wss.on('connection', (socket) => {
@@ -86,6 +97,7 @@ export function createWebSocketServer(
 
     socket.send(JSON.stringify({ type: 'hello', protocol: MEDIA_PROTOCOL_VERSION }));
     socket.send(JSON.stringify({ type: 'state', emulator: options.emulator.status() }));
+    socket.send(JSON.stringify({ type: 'chat-status', chat: options.chat.getStatus() }));
     options.emulator.attachClient(socket);
 
     socket.on('close', () => {

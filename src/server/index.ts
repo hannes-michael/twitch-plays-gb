@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
+import { ChatService } from './chat/service';
 import { EmulatorService } from './emulator/service';
 import { createLogger } from './logger';
 import { createServerState } from './state';
@@ -51,11 +52,17 @@ async function main(): Promise<void> {
     state.emulator = emulatorStatus.status;
   });
 
+  const chat = new ChatService(logger);
+  if (config.dev || config.test) {
+    await chat.startFake();
+    logger.info('fake chat source started (development/test mode)');
+  }
+
   const httpServer = createServer();
   let appContext;
 
   try {
-    appContext = await createApp(config, state, logger, httpServer, emulator);
+    appContext = await createApp(config, state, logger, httpServer, emulator, chat);
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
     process.exitCode = 1;
@@ -67,6 +74,7 @@ async function main(): Promise<void> {
   const wss = createWebSocketServer(httpServer, state, logger, {
     passThroughPaths: config.dev || config.test ? [VITE_HMR_PATH] : [],
     emulator,
+    chat,
   });
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {
@@ -146,6 +154,13 @@ async function main(): Promise<void> {
         } catch (closeError: unknown) {
           appCloseFailed = true;
           logger.error(`Failed to close emulator: ${(closeError as Error).message}`);
+        }
+
+        try {
+          await chat.close();
+        } catch (closeError: unknown) {
+          appCloseFailed = true;
+          logger.error(`Failed to close chat: ${(closeError as Error).message}`);
         }
 
         try {

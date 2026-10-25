@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import type { ChatTimings } from './chat';
 
 export const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -12,6 +13,11 @@ export const CONFIG_DEFAULTS = {
   logLevel: 'info',
   dev: false,
   test: false,
+  timings: {
+    democracyWindowMs: 15_000,
+    holdFrames: 8,
+    releaseFrames: 4,
+  },
 } as const;
 
 const booleanValue = z.union([z.boolean(), z.string()]).transform((value, ctx) => {
@@ -77,6 +83,33 @@ const logLevelValue = z
   })
   .default(CONFIG_DEFAULTS.logLevel);
 
+function timingValue(min: number, max: number, fallback: number) {
+  return z
+    .union([z.number(), z.string()])
+    .transform((value, ctx) => {
+      if (typeof value === 'string' && value.trim() === '') return fallback;
+      const parsed = typeof value === 'number' ? value : Number(value);
+      if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `expected an integer between ${min} and ${max}, received ${JSON.stringify(value)}`,
+        });
+        return z.NEVER;
+      }
+      return parsed;
+    })
+    .default(fallback);
+}
+
+const TimingsSchema = z
+  .object({
+    democracyWindowMs: timingValue(1, 3_600_000, CONFIG_DEFAULTS.timings.democracyWindowMs),
+    holdFrames: timingValue(1, 600, CONFIG_DEFAULTS.timings.holdFrames),
+    releaseFrames: timingValue(1, 600, CONFIG_DEFAULTS.timings.releaseFrames),
+  })
+  .strict()
+  .default({ ...CONFIG_DEFAULTS.timings });
+
 const ConfigSchema = z
   .object({
     host: z.string().trim().min(1).default(CONFIG_DEFAULTS.host),
@@ -87,6 +120,7 @@ const ConfigSchema = z
     dev: booleanValue.default(CONFIG_DEFAULTS.dev),
     test: booleanValue.default(CONFIG_DEFAULTS.test),
     logLevel: logLevelValue,
+    timings: TimingsSchema,
   })
   .strict();
 
@@ -109,12 +143,16 @@ Options:
   --rom <path>           Game Boy, GBC, or GBA ROM to boot (.gb/.gbc/.gba)
   --channel <name>       Twitch channel name
   --log-level <level>    debug | info | warn | error (default: info)
+  --democracy-window-ms <ms>  Democracy vote window (default: 15000)
+  --hold-frames <frames>      Frames to hold an input (default: 8)
+  --release-frames <frames>   Frames to release an input (default: 4)
   --dev[=<bool>]         Enable development mode and Vite middleware
   --test[=<bool>]        Enable test mode and Vite middleware
   -h, --help             Show this help
 
 Environment: HOST, PORT, TPG_HOST, TPG_PORT, TPG_DATA_DIR, TPG_CONFIG,
-TPG_ROM, TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL`;
+TPG_ROM, TPG_CHANNEL, TPG_DEV, TPG_TEST, TPG_LOG_LEVEL,
+TPG_DEMOCRACY_WINDOW_MS, TPG_HOLD_FRAMES, TPG_RELEASE_FRAMES`;
 
 export class HelpRequested extends Error {
   constructor() {
@@ -128,6 +166,12 @@ export interface LoadConfigOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+interface TimingValues {
+  democracyWindowMs?: string;
+  holdFrames?: string;
+  releaseFrames?: string;
+}
+
 interface CliValues {
   host?: string;
   port?: string;
@@ -138,10 +182,26 @@ interface CliValues {
   test?: string;
   logLevel?: string;
   config?: string;
+  timings?: TimingValues;
 }
 
+const TIMING_FLAGS: Record<string, keyof ChatTimings> = {
+  'democracy-window-ms': 'democracyWindowMs',
+  'hold-frames': 'holdFrames',
+  'release-frames': 'releaseFrames',
+};
+
 const BOOLEAN_FLAGS = new Set(['dev', 'test']);
-const VALUE_FLAGS = new Set(['host', 'port', 'data-dir', 'rom', 'channel', 'log-level', 'config']);
+const VALUE_FLAGS = new Set([
+  'host',
+  'port',
+  'data-dir',
+  'rom',
+  'channel',
+  'log-level',
+  'config',
+  ...Object.keys(TIMING_FLAGS),
+]);
 
 function parseCliArgs(argv: string[]): CliValues {
   const values: CliValues = {};
@@ -219,14 +279,19 @@ function parseCliArgs(argv: string[]): CliValues {
       case 'config':
         values.config = value;
         break;
+      default: {
+        const timingKey = TIMING_FLAGS[name];
+        if (timingKey) values.timings = { ...values.timings, [timingKey]: value };
+        break;
+      }
     }
   }
 
   return values;
 }
 
-function readEnv(env: NodeJS.ProcessEnv): Partial<Record<keyof CliValues, string>> {
-  const values: Partial<Record<keyof CliValues, string>> = {};
+function readEnv(env: NodeJS.ProcessEnv): CliValues {
+  const values: CliValues = {};
 
   const host = env.TPG_HOST ?? env.HOST;
   if (host !== undefined && host !== '') values.host = host;
@@ -240,6 +305,12 @@ function readEnv(env: NodeJS.ProcessEnv): Partial<Record<keyof CliValues, string
   if (env.TPG_DEV !== undefined) values.dev = env.TPG_DEV;
   if (env.TPG_TEST !== undefined) values.test = env.TPG_TEST;
   if (env.TPG_LOG_LEVEL) values.logLevel = env.TPG_LOG_LEVEL;
+
+  const timings: TimingValues = {};
+  if (env.TPG_DEMOCRACY_WINDOW_MS) timings.democracyWindowMs = env.TPG_DEMOCRACY_WINDOW_MS;
+  if (env.TPG_HOLD_FRAMES) timings.holdFrames = env.TPG_HOLD_FRAMES;
+  if (env.TPG_RELEASE_FRAMES) timings.releaseFrames = env.TPG_RELEASE_FRAMES;
+  if (Object.keys(timings).length > 0) values.timings = timings;
 
   return values;
 }
@@ -333,11 +404,22 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const fileValues = readConfigFile(configPath, configuredPath !== undefined);
 
   const { config: _configPath, ...cliValues } = cli;
+  const fileTimings =
+    typeof fileValues.timings === 'object' &&
+    fileValues.timings !== null &&
+    !Array.isArray(fileValues.timings)
+      ? (fileValues.timings as Record<string, unknown>)
+      : {};
   const merged = {
     dataDir: baseDataDir,
     ...fileValues,
     ...envValues,
     ...cliValues,
+    timings: {
+      ...fileTimings,
+      ...envValues.timings,
+      ...cliValues.timings,
+    },
   };
 
   const result = ConfigSchema.safeParse(merged);
