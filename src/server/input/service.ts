@@ -7,6 +7,7 @@ import type {
   InputMode,
   InputState,
   InputStats,
+  LocalInputResponse,
 } from '../../shared/input';
 import type { ChatService } from '../chat/service';
 import { EmulatorNotRunningError, type EmulatorService } from '../emulator/service';
@@ -22,6 +23,7 @@ export interface InputServiceOptions {
 
 const MAX_RECENT_INPUTS = 10;
 const RATE_WINDOW_MS = 1_000;
+const LOCAL_INPUT_USER = 'local';
 
 function createStats(): InputStats {
   return {
@@ -97,6 +99,53 @@ export class InputService {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  /**
+   * Enqueues an operator input from the desktop dashboard. Local input bypasses
+   * chat cooldowns and the global chat rate cap, but still shares the bounded
+   * FIFO queue with chat and only runs while the emulator is running.
+   */
+  pressLocal(button: InputButton): LocalInputResponse {
+    if (this.emulator.status().status !== 'running') {
+      return { accepted: false, reason: 'not-running', input: this.getState() };
+    }
+
+    const now = Date.now();
+    const timestamp = new Date(now).toISOString();
+    if (this.queue.length >= this.timings.inputMaxQueue) {
+      const rejected: InputEvent = {
+        id: randomUUID(),
+        user: LOCAL_INPUT_USER,
+        button,
+        source: 'local',
+        receivedAt: timestamp,
+        queuedAt: timestamp,
+        status: 'dropped',
+        dropReason: 'queue-full',
+      };
+      this.markDropped(rejected, 'queue-full', now);
+      this.addRecent(rejected);
+      this.publish();
+      return { accepted: false, reason: 'queue-full', input: this.getState() };
+    }
+
+    const event: InputEvent = {
+      id: randomUUID(),
+      user: LOCAL_INPUT_USER,
+      button,
+      source: 'local',
+      receivedAt: timestamp,
+      queuedAt: timestamp,
+      status: 'queued',
+    };
+
+    this.stats.accepted += 1;
+    this.queue.push(event);
+    this.addRecent(event);
+    this.publish();
+    this.scheduleProcess();
+    return { accepted: true, input: this.getState() };
   }
 
   close(): void {

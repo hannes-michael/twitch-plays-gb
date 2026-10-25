@@ -7,6 +7,7 @@ import { chatOutageRequestSchema } from '../shared/chat';
 import type { AppConfig } from '../shared/config';
 import type { DebugSnapshot } from '../shared/debug';
 import type { EmulatorSaveResponse } from '../shared/emulator-status';
+import { INPUT_BUTTONS, type InputButton, type LocalInputResponse } from '../shared/input';
 import type { RomImportResponse, RomListResponse, RomResponse } from '../shared/roms';
 import {
   normalizeTwitchChannel,
@@ -15,6 +16,7 @@ import {
 } from '../shared/settings';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
+import type { AudioService } from './audio/service';
 import type { EmulatorService, EmulatorStartOptions } from './emulator/service';
 import { ChatInputError, ChatUnavailableError, type ChatService } from './chat/service';
 import type { InputService } from './input/service';
@@ -72,6 +74,7 @@ export async function createApp(
   settings: SettingsStore,
   chat: ChatService,
   input: InputService,
+  audio: AudioService,
 ): Promise<AppContext> {
   const app = express();
   app.disable('x-powered-by');
@@ -156,6 +159,60 @@ export async function createApp(
   apiRouter.get('/input/state', (_request, response) => {
     response.set('Cache-Control', 'no-store');
     response.json(input.getState());
+  });
+
+  apiRouter.post('/input', jsonBody, (request, response) => {
+    const body = bodyObject(request.body);
+    if (
+      typeof body.button !== 'string' ||
+      !(INPUT_BUTTONS as readonly string[]).includes(body.button)
+    ) {
+      response.status(400).json({ error: 'Invalid input button' });
+      return;
+    }
+
+    const result = input.pressLocal(body.button as InputButton);
+    const payload: LocalInputResponse = {
+      accepted: result.accepted,
+      ...(result.reason ? { reason: result.reason } : {}),
+      input: result.input,
+    };
+    response.json(payload);
+  });
+
+  apiRouter.get('/audio', (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json(audio.getState());
+  });
+
+  apiRouter.post('/audio', jsonBody, (request, response) => {
+    const body = bodyObject(request.body);
+    const keys = Object.keys(body);
+    if (keys.length === 0 || keys.some((key) => key !== 'muted' && key !== 'volume')) {
+      response.status(400).json({ error: 'Invalid audio control' });
+      return;
+    }
+    if (body.muted !== undefined && typeof body.muted !== 'boolean') {
+      response.status(400).json({ error: 'Invalid audio control' });
+      return;
+    }
+    if (
+      body.volume !== undefined &&
+      (typeof body.volume !== 'number' ||
+        !Number.isFinite(body.volume) ||
+        body.volume < 0 ||
+        body.volume > 1)
+    ) {
+      response.status(400).json({ error: 'Invalid audio control' });
+      return;
+    }
+
+    response.json(
+      audio.update({
+        ...(body.muted === undefined ? {} : { muted: body.muted }),
+        ...(body.volume === undefined ? {} : { volume: body.volume }),
+      }),
+    );
   });
 
   apiRouter.get('/chat', (_request, response) => {

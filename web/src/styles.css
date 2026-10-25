@@ -823,6 +823,139 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.audio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  align-items: center;
+  margin: 0.35rem 0 0.65rem;
+}
+
+.audio-controls .secondary-action {
+  margin-top: 0;
+}
+
+.audio-volume {
+  display: inline-flex;
+  gap: 0.6rem;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.audio-volume input[type='range'] {
+  width: min(14rem, 45vw);
+  accent-color: var(--accent);
+}
+
+.audio-volume output {
+  min-width: 3rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.local-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  align-items: center;
+  margin: 0.9rem 0 0.65rem;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 2.8rem);
+  grid-template-rows: repeat(3, 2.8rem);
+  grid-template-areas:
+    '. up .'
+    'left . right'
+    '. down .';
+  gap: 0.3rem;
+}
+
+.dpad-up {
+  grid-area: up;
+}
+
+.dpad-down {
+  grid-area: down;
+}
+
+.dpad-left {
+  grid-area: left;
+}
+
+.dpad-right {
+  grid-area: right;
+}
+
+.local-button {
+  min-width: 2.8rem;
+  min-height: 2.8rem;
+  padding: 0.4rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 0.75rem;
+  background: rgb(7 12 26 / 75%);
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.local-button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.local-button:focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.local-button:active:not(:disabled) {
+  background: rgb(139 92 246 / 25%);
+  transform: translateY(1px);
+}
+
+.local-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.face-pad {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.face-a,
+.face-b {
+  width: 3.2rem;
+  height: 3.2rem;
+  border-radius: 50%;
+}
+
+.face-a {
+  border-color: rgb(52 211 153 / 70%);
+  background: rgb(52 211 153 / 20%);
+}
+
+.face-b {
+  border-color: rgb(248 113 113 / 65%);
+  background: rgb(248 113 113 / 15%);
+}
+
+.system-pad {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  max-width: 16rem;
+}
+
+.system-button {
+  min-width: 4.2rem;
+}
+
 .chat-input-recent {
   display: flex;
   flex-wrap: wrap;

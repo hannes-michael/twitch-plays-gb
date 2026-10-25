@@ -72,9 +72,12 @@ npm start -- --rom tests/fixtures/roms/test_gb.gb
 The server starts without a ROM by default, so `/`, `/health`, and the setup
 screen keep working. With a ROM, `/api/emulator/status` reports the model,
 dimensions, frame/audio counters, and 48 kHz audio state, and
-`/overlay?client=obs` renders the live canvas and audio. Browsers block audio
-until a user gesture: click **Unmute audio** in the overlay (OBS Browser Source
-has its own audio-permission setting).
+`/overlay?client=obs` renders the live canvas. The OBS browser source and the
+Electron capture window are stream-clean: no counters, status chips, ticker, or
+audio buttons. Use `/overlay?client=preview` (or no `client`) for the diagnostic
+HUD. Stream audio is controlled from the dashboard (mute and volume) and applies
+to every overlay client. If a browser blocks autoplay, clicking the clean
+overlay once retries the audio unlock; OBS can also allow autoplay itself.
 
 ## First-run setup, ROM library, and lifecycle
 
@@ -96,12 +99,13 @@ serialized, and corrupt `settings.json` or `roms.json` files fall back to
 defaults with a warning instead of blocking server startup.
 
 **Finish setup** writes `<dataDir>/settings.json` and explicitly starts the
-selected ROM. The dashboard-lite exposes Start, Stop, Restart, an OBS overlay
-link, and Reconfigure. `POST /api/emulator/start|stop|restart` are serialized by
-the emulator service and return `{ "status": ... }`. A failed boot returns HTTP
-200 with `status: "error"` and a sanitized `lastError`, so the server stays up
-and the UI can show the failure. On server start `--rom` wins over the saved
-ROM; the saved ROM starts when no `--rom` is given. A configured `--rom`
+selected ROM. The dashboard exposes Start, Stop, Restart, Save, stream-audio
+mute/volume, manual D-pad/keyboard input, an OBS overlay link, and Reconfigure.
+`POST /api/emulator/start|stop|restart` are serialized by the emulator service
+and return `{ "status": ... }`. A failed boot returns HTTP 200 with
+`status: "error"` and a sanitized `lastError`, so the server stays up and the UI
+can show the failure. On server start `--rom` wins over the saved ROM; the saved
+ROM starts when no `--rom` is given. A configured `--rom`
 reports `romId: null`.
 
 Battery-backed SRAM is flushed on stop to `<dataDir>/saves/<key>.sav` when the
@@ -137,10 +141,12 @@ client and only the newest channel stays connected. Chat failures never stop the
 emulator or its input queue.
 
 Test mode always uses the deterministic fake source and never touches the
-network. Development defaults to fake too; `TPG_CHAT=twitch npm run dev` forces
-the real source, and `TPG_CHAT=fake` keeps fake chat in development. In
-production `TPG_CHAT=fake` reports no source rather than exposing a fake chat
-that has no external input.
+network. Development uses real anonymous Twitch chat as soon as a channel is
+configured, so a normal `npm run dev` session with a saved or `TPG_CHANNEL`
+channel interacts with actual chat. With no channel, development keeps the fake
+source for the developer panel; `TPG_CHAT=fake` forces fake chat. In production
+`TPG_CHAT=fake` reports no source rather than exposing a fake chat that has no
+external input.
 
 Chat messages become input when they match a command. The `!` prefix is
 required by default (`!right`, `!a`, `!start`); aliases include `u`, `d`,
@@ -164,8 +170,25 @@ Input changes are broadcast on `/ws` as `{ "type": "input-state", "input": ... }
 and new clients receive the current state immediately. Input-state broadcasts
 are coalesced to at most 10 Hz with a trailing update, and text broadcasts skip
 clients whose WebSocket buffer exceeds 512 KiB. The dashboard polls the state
-once per second, and the overlay consumes the WS messages for its mode, queue
-count, and recent-input ticker.
+once per second, and the preview overlay consumes the WS messages for its mode,
+queue count, and recent-input ticker.
+
+The dashboard also owns local controls. `POST /api/input` with
+`{ "button": "UP" }` enqueues an operator input (`source: "local"`, user
+`local`); it bypasses chat cooldowns and the global rate cap but still respects
+the queue cap and only runs while the emulator is running. The response is
+`{ accepted, reason?, input }`, where `reason` is `not-running`, `queue-full`, or
+an execution drop reason. Manual buttons and these keyboard shortcuts send the
+same request when focus is not in a form control: arrows, `X` (A), `Z` (B),
+`Enter` (Start), `Shift` (Select), `Q` (L), and `W` (R).
+
+`GET /api/audio` returns `{ muted, volume }`, and `POST /api/audio` updates
+either field (`volume` is 0..1). The state is shared by all overlay clients and
+broadcast on `/ws` as `{ "type": "audio-state", "audio": ... }`; new clients
+receive it immediately. The stream starts unmuted at full volume. The clean OBS
+and capture clients apply the state without any visible debug UI; the preview
+client also shows playback state and an unlock button. If a browser blocks
+autoplay, a click on the clean overlay retries `AudioContext.resume()`.
 
 `--rom` sessions keep their last successful start options for Start and Restart
 requests without an explicit `romId`, so lifecycle controls never switch to the
@@ -326,12 +349,12 @@ $env:TPG_CAPTURE = '1'; npm run dev
 
 The window is 960 × 540, resizable, black, and keeps the title
 **Twitch Plays GB Capture** regardless of page-title changes. It loads
-`/overlay?client=capture` and uses Electron's
-`autoplayPolicy: 'no-user-gesture-required'`. The overlay still starts muted;
-click **Unmute audio** in the capture window once. Closing it leaves the
-dashboard open. Bounds persistence and tray integration are later P1 work. See
-`docs/OBS.md` for OBS Window/Application Capture steps and the unexecuted manual
-checklist.
+`/overlay?client=capture` (stream-clean) and uses Electron's
+`autoplayPolicy: 'no-user-gesture-required'`, so audio starts unmuted without a
+click. Use the dashboard's **Stream audio** mute/volume controls; they reach the
+capture window over the server WebSocket. Closing it leaves the dashboard open.
+Bounds persistence and tray integration are later P1 work. See `docs/OBS.md` for
+OBS Window/Application Capture steps and the unexecuted manual checklist.
 
 ## Data directories
 

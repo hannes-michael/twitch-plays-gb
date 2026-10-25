@@ -7,15 +7,15 @@ window.
 
 > Status: MVP core. The config-driven server, validated ROM import, first-run
 > wizard, dashboard lifecycle controls, anonymous read-only Twitch chat with an
-> anarchy input queue, local GB/GBC/GBA video/audio overlay, autosave/restore,
-> Electron shell (including a spawned server child and OBS capture window),
-> one-command dev workflow, developer-only fake chat/debug panel, OBS setup
-> guide, and Linux AppImage/.deb builds are runnable. Linux packaged builds pass
-> a headless smoke test; Windows packaging is wired for CI but has not been
-> executed in the development environment. Democracy mode, mode switching,
-> pause/resume, tray/bounds polish, and the manual OBS checks remain. See
-> `PLAN.md` for the local implementation roadmap (not committed) and
-> `docs/TESTING.md` for the E2E-first workflow.
+> anarchy input queue, local dashboard controls (stream audio and manual input),
+> a stream-clean OBS browser source, autosave/restore, Electron shell (including
+> a spawned server child and OBS capture window), one-command dev workflow,
+> developer-only fake chat/debug panel, OBS setup guide, and Linux AppImage/.deb
+> builds are runnable. Linux packaged builds pass a headless smoke test; Windows
+> packaging is wired for CI but has not been executed in the development
+> environment. Democracy mode, mode switching, pause/resume, tray/bounds polish,
+> and the manual OBS checks remain. See `PLAN.md` for the local implementation
+> roadmap (not committed) and `docs/TESTING.md` for the E2E-first workflow.
 
 ## Requirements
 
@@ -54,11 +54,12 @@ Open the printed URL in your browser.
 
 ## Chat input
 
-Production connects anonymously (read-only) to the configured Twitch channel.
-Development and tests use a fake chat source; use the developer panel or the
-test-only injection endpoint to send commands. The default anarchy mode accepts
-FIFO commands with per-user cooldowns, a global rate cap, queue limits, and
-stale-command drops:
+Production and development connect anonymously (read-only) to the configured
+Twitch channel. Development keeps the fake source only until a channel is saved
+or passed with `TPG_CHANNEL`; then `npm run dev` talks to real chat.
+`TPG_CHAT=fake` forces fake chat in development, and tests always use fake chat.
+The default anarchy mode accepts FIFO commands with per-user cooldowns, a global
+rate cap, queue limits, and stale-command drops:
 
 ```text
 !up  !down  !left  !right  !a  !b  !start  !select  !l  !r
@@ -69,6 +70,23 @@ Aliases such as `!u`, `!d`, `!st`, and `!sel` are accepted. Bare commands
 can use `!save` to write a save state; other chat messages are ignored for that
 command. Bots and the broadcaster’s own bot messages are filtered. See
 `docs/DEVELOPMENT.md` for timings and the fake-chat API.
+
+## Dashboard controls
+
+The dashboard controls stream audio for every overlay client and can send local
+input without chat. The mute button and volume slider apply to the OBS browser
+source and the Electron capture window; the stream starts unmuted. Manual
+controls provide a D-pad plus A/B/Start/Select/L/R buttons, and the keyboard
+works while focus is not in a form field:
+
+```text
+Arrows = D-pad   X = A   Z = B   Enter = Start   Shift = Select   Q = L   W = R
+```
+
+Local input bypasses chat cooldowns and the global chat rate cap, but shares the
+same bounded FIFO queue, so it can still be rejected when the queue is full.
+The browser source itself stays stream-clean; open `/overlay?client=preview` for
+the diagnostic HUD with counters and the recent-input ticker.
 
 ## Saves
 
@@ -157,9 +175,10 @@ for now. See `.env.example`.
 - `docs/OBS.md` — Browser Source and capture window setup, audio checklist (manual, pending)
 - `docs/DECISIONS.md` — architecture decisions and spike outcomes
 
-OBS manual verification is still pending. Twitch chat is not connected yet;
-development/test servers expose a fake chat source through the dashboard's
-Developer panel and `POST /api/test/chat` (see `docs/DEVELOPMENT.md`).
+OBS manual verification is still pending. Development falls back to the fake
+chat source until a channel is configured; use the dashboard's Developer panel
+and `POST /api/test/chat` to inject messages without Twitch (see
+`docs/DEVELOPMENT.md`). Tests never contact Twitch.
 
 ## Legal
 

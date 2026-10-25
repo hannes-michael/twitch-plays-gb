@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { APIRequestContext } from '@playwright/test';
 import WebSocket from 'ws';
 import { ChatService } from '../../../src/server/chat/service';
+import { selectChatSource } from '../../../src/server/chat/policy';
 import type { ChatSource } from '../../../src/server/chat/types';
 import { isTwitchBot } from '../../../src/server/chat/twitch-source';
 import type { Logger } from '../../../src/server/logger';
@@ -147,6 +148,33 @@ class ControlledTwitchSource implements ChatSource {
 }
 
 test.describe('chat source safeguards', () => {
+  test('selects real Twitch chat in development when a channel is configured', () => {
+    expect(
+      selectChatSource({ dev: true, test: false, preference: 'auto', channel: 'example' }),
+    ).toBe('twitch');
+    expect(
+      selectChatSource({ dev: true, test: false, preference: 'twitch', channel: 'example' }),
+    ).toBe('twitch');
+    expect(selectChatSource({ dev: true, test: false, preference: 'auto', channel: null })).toBe(
+      'fake',
+    );
+    expect(
+      selectChatSource({ dev: true, test: false, preference: 'fake', channel: 'example' }),
+    ).toBe('fake');
+    expect(
+      selectChatSource({ dev: false, test: false, preference: 'auto', channel: 'example' }),
+    ).toBe('twitch');
+    expect(selectChatSource({ dev: false, test: false, preference: 'auto', channel: null })).toBe(
+      'none',
+    );
+    expect(
+      selectChatSource({ dev: false, test: false, preference: 'fake', channel: 'example' }),
+    ).toBe('none');
+    expect(
+      selectChatSource({ dev: true, test: true, preference: 'auto', channel: 'example' }),
+    ).toBe('fake');
+  });
+
   test('maps Twitch bot badges and known bot usernames', () => {
     expect(isTwitchBot('viewer', new Map([['bot-badge', '1']]))).toBe(true);
     expect(isTwitchBot('viewer', new Map([['twitchbot', '1']]))).toBe(true);
@@ -272,7 +300,7 @@ test.describe('chat input', () => {
     const pageErrors: string[] = [];
     app.page.on('pageerror', (error) => pageErrors.push(error.message));
 
-    const response = await app.page.goto(`${app.baseURL}/overlay?client=obs`, {
+    const response = await app.page.goto(`${app.baseURL}/overlay?client=preview`, {
       waitUntil: 'domcontentloaded',
     });
     expect(response?.ok()).toBe(true);
@@ -470,7 +498,7 @@ test.describe('chat input', () => {
     const pageErrors: string[] = [];
     app.page.on('pageerror', (error) => pageErrors.push(error.message));
 
-    const response = await app.page.goto(`${app.baseURL}/overlay?client=obs`, {
+    const response = await app.page.goto(`${app.baseURL}/overlay?client=preview`, {
       waitUntil: 'domcontentloaded',
     });
     expect(response?.ok()).toBe(true);

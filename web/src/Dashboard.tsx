@@ -1,13 +1,48 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { DEFAULT_AUDIO_CONTROL, type AudioControl } from '@shared/audio';
 import type { ChatStatus } from '@shared/chat';
 import type { EmulatorStatus } from '@shared/emulator-status';
-import type { InputState } from '@shared/input';
+import type { InputButton, InputState, LocalInputResponse } from '@shared/input';
 import type { SettingsResponse } from '@shared/settings';
 
 export type EmulatorOperation = 'start' | 'stop' | 'restart';
 
 const INPUT_POLL_INTERVAL_MS = 1_000;
 const INPUT_REQUEST_TIMEOUT_MS = 1_500;
+
+const KEY_BINDINGS: Record<string, InputButton> = {
+  ArrowUp: 'UP',
+  ArrowDown: 'DOWN',
+  ArrowLeft: 'LEFT',
+  ArrowRight: 'RIGHT',
+  KeyX: 'A',
+  KeyZ: 'B',
+  Enter: 'START',
+  ShiftLeft: 'SELECT',
+  ShiftRight: 'SELECT',
+  KeyQ: 'L',
+  KeyW: 'R',
+};
+
+const DPAD_BUTTONS: Array<{ button: InputButton; label: string; className: string; name: string }> =
+  [
+    { button: 'UP', label: '↑', className: 'dpad-up', name: 'Up' },
+    { button: 'LEFT', label: '←', className: 'dpad-left', name: 'Left' },
+    { button: 'RIGHT', label: '→', className: 'dpad-right', name: 'Right' },
+    { button: 'DOWN', label: '↓', className: 'dpad-down', name: 'Down' },
+  ];
+
+const FACE_BUTTONS: Array<{ button: InputButton; className: string; name: string }> = [
+  { button: 'B', className: 'face-b', name: 'B' },
+  { button: 'A', className: 'face-a', name: 'A' },
+];
+
+const SYSTEM_BUTTONS: Array<{ button: InputButton; name: string }> = [
+  { button: 'START', name: 'Start' },
+  { button: 'SELECT', name: 'Select' },
+  { button: 'L', name: 'L' },
+  { button: 'R', name: 'R' },
+];
 
 function inputStatus(event: InputState['recent'][number]): string {
   if (event.status === 'dropped') return event.dropReason ?? 'dropped';
@@ -43,6 +78,10 @@ export default function Dashboard({
 }: DashboardProps) {
   const [input, setInput] = useState<InputState | null>(null);
   const [chat, setChat] = useState<ChatStatus | null>(null);
+  const [audio, setAudio] = useState<AudioControl>({ ...DEFAULT_AUDIO_CONTROL });
+  const [controlNotice, setControlNotice] = useState<string | null>(null);
+  const audioRequestPending = useRef(0);
+  const sendLocalInputRef = useRef<(button: InputButton) => void>(() => {});
 
   useEffect(() => {
     let active = true;
@@ -53,12 +92,16 @@ export default function Dashboard({
       const timeout = setTimeout(() => controller.abort(), INPUT_REQUEST_TIMEOUT_MS);
 
       try {
-        const [inputResponse, chatResponse] = await Promise.all([
+        const [inputResponse, chatResponse, audioResponse] = await Promise.all([
           fetch('/api/input/state', {
             signal: controller.signal,
             headers: { accept: 'application/json' },
           }),
           fetch('/api/chat', {
+            signal: controller.signal,
+            headers: { accept: 'application/json' },
+          }),
+          fetch('/api/audio', {
             signal: controller.signal,
             headers: { accept: 'application/json' },
           }),
@@ -68,6 +111,9 @@ export default function Dashboard({
         }
         if (active && chatResponse.ok) {
           setChat((await chatResponse.json()) as ChatStatus);
+        }
+        if (active && audioResponse.ok && audioRequestPending.current === 0) {
+          setAudio((await audioResponse.json()) as AudioControl);
         }
       } catch {
         // Transient polling failures stay quiet; the server-status chip covers
@@ -86,11 +132,95 @@ export default function Dashboard({
     };
   }, []);
 
+  const updateAudioControl = async (patch: Partial<AudioControl>): Promise<void> => {
+    setAudio((current) => ({ ...current, ...patch }));
+    setControlNotice(null);
+    audioRequestPending.current += 1;
+
+    try {
+      const response = await fetch('/api/audio', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const body = (await response.json().catch(() => null)) as
+        (AudioControl & { error?: string }) | null;
+
+      if (!response.ok || !body) {
+        setControlNotice(body?.error ?? `Could not update stream audio (HTTP ${response.status}).`);
+        return;
+      }
+      setAudio(body);
+    } catch {
+      setControlNotice('Could not reach the local server.');
+    } finally {
+      audioRequestPending.current = Math.max(0, audioRequestPending.current - 1);
+    }
+  };
+
+  const sendLocalInput = async (button: InputButton): Promise<void> => {
+    if (emulator.status !== 'running') return;
+
+    setControlNotice(null);
+    try {
+      const response = await fetch('/api/input', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ button }),
+      });
+      const body = (await response.json().catch(() => null)) as
+        (LocalInputResponse & { error?: string }) | null;
+
+      if (!response.ok || !body) {
+        setControlNotice(body?.error ?? `Could not send ${button} (HTTP ${response.status}).`);
+        return;
+      }
+
+      setInput(body.input);
+      if (!body.accepted) {
+        if (body.reason === 'not-running') {
+          setControlNotice('Start the emulator before sending input.');
+        } else if (body.reason === 'queue-full') {
+          setControlNotice('The input queue is full.');
+        } else {
+          setControlNotice(`Input ${button} was rejected.`);
+        }
+      }
+    } catch {
+      setControlNotice('Could not reach the local server.');
+    }
+  };
+  sendLocalInputRef.current = (button) => {
+    void sendLocalInput(button);
+  };
+
+  useEffect(() => {
+    if (emulator.status !== 'running') return;
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return;
+
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, button, a, [contenteditable="true"]')) return;
+
+      const button = KEY_BINDINGS[event.code];
+      if (!button) return;
+
+      event.preventDefault();
+      sendLocalInputRef.current(button);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [emulator.status]);
+
   const romLabel = emulator.rom
     ? `${emulator.rom.title} · ${emulator.rom.model} ${emulator.rom.width}x${emulator.rom.height}`
     : 'No ROM loaded';
   const modeLabel = input?.mode === 'democracy' ? 'Democracy' : 'Anarchy';
   const recent = input ? input.recent.slice(-8).reverse() : [];
+  const running = emulator.status === 'running';
+  const volumePercent = Math.round(audio.volume * 100);
 
   return (
     <section className="setup-card dashboard-card" aria-labelledby="dashboard-title">
@@ -143,6 +273,54 @@ export default function Dashboard({
           <dd data-testid="autosave-interval">{autosaveLabel(emulator.autosaveIntervalMs)}</dd>
         </div>
       </dl>
+
+      <section
+        className="chat-input-panel"
+        aria-labelledby="stream-audio-title"
+        data-testid="stream-audio-panel"
+      >
+        <div className="chat-input-heading">
+          <h3 id="stream-audio-title">Stream audio</h3>
+          <span
+            className="chat-mode"
+            data-testid="stream-audio-status"
+            data-audio-muted={audio.muted ? 'true' : 'false'}
+          >
+            {audio.muted ? 'Muted' : `${volumePercent}%`}
+          </span>
+        </div>
+        <div className="audio-controls">
+          <button
+            type="button"
+            className="secondary-action"
+            data-testid="toggle-stream-audio"
+            data-audio-muted={audio.muted ? 'true' : 'false'}
+            aria-pressed={!audio.muted}
+            onClick={() => void updateAudioControl({ muted: !audio.muted })}
+          >
+            {audio.muted ? 'Unmute stream' : 'Mute stream'}
+          </button>
+          <label className="audio-volume">
+            <span>Volume</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={volumePercent}
+              data-testid="stream-audio-volume"
+              onChange={(event) =>
+                void updateAudioControl({ volume: Number(event.target.value) / 100 })
+              }
+            />
+            <output data-testid="stream-audio-volume-value">{volumePercent}%</output>
+          </label>
+        </div>
+        <p className="field-hint">
+          Applies to the OBS overlay and the Electron capture window. The browser source itself
+          stays free of debug controls.
+        </p>
+      </section>
 
       <section
         className="chat-input-panel"
@@ -208,6 +386,71 @@ export default function Dashboard({
         </ol>
       </section>
 
+      <section
+        className="chat-input-panel"
+        aria-labelledby="local-input-title"
+        data-testid="local-input"
+      >
+        <div className="chat-input-heading">
+          <h3 id="local-input-title">Manual controls</h3>
+          <span className="chat-mode">{running ? 'Ready' : 'Start the emulator'}</span>
+        </div>
+        <div className="local-controls">
+          <div className="dpad" aria-label="Directional pad">
+            {DPAD_BUTTONS.map(({ button, label, className, name }) => (
+              <button
+                key={button}
+                type="button"
+                className={`local-button ${className}`}
+                data-testid={`local-input-${button}`}
+                aria-label={name}
+                title={name}
+                disabled={!running}
+                onClick={() => void sendLocalInput(button)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="face-pad" aria-label="Face buttons">
+            {FACE_BUTTONS.map(({ button, className, name }) => (
+              <button
+                key={button}
+                type="button"
+                className={`local-button ${className}`}
+                data-testid={`local-input-${button}`}
+                aria-label={name}
+                title={name}
+                disabled={!running}
+                onClick={() => void sendLocalInput(button)}
+              >
+                {button}
+              </button>
+            ))}
+          </div>
+          <div className="system-pad" aria-label="System buttons">
+            {SYSTEM_BUTTONS.map(({ button, name }) => (
+              <button
+                key={button}
+                type="button"
+                className="local-button system-button"
+                data-testid={`local-input-${button}`}
+                aria-label={name}
+                title={name}
+                disabled={!running}
+                onClick={() => void sendLocalInput(button)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="field-hint">
+          Keyboard: arrows move · X = A · Z = B · Enter = Start · Shift = Select · Q = L · W = R.
+          Local inputs skip chat cooldowns but share the queue with chat.
+        </p>
+      </section>
+
       <div className="dashboard-actions">
         <button
           type="button"
@@ -265,6 +508,11 @@ export default function Dashboard({
         </button>
       </div>
 
+      {controlNotice ? (
+        <p className="notice" role="status" data-testid="dashboard-control-notice">
+          {controlNotice}
+        </p>
+      ) : null}
       {emulator.lastSaveError ? (
         <p className="notice" role="alert" data-testid="save-error">
           Save failed: {emulator.lastSaveError}

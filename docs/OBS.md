@@ -15,8 +15,11 @@ local sources:
 
 ## Browser Source (`/overlay?client=obs`)
 
-The overlay is a normal web page and keeps working in a browser. `client=obs`
-is currently a hint only; per-client media roles arrive in P1-09.
+The overlay is a normal web page and keeps working in a browser. The
+`client=obs` surface is **stream-clean**: it renders only the emulator canvas.
+Counters, status chips, the recent-input ticker, and audio buttons are omitted.
+Use `/overlay?client=preview` when you want the diagnostic HUD during local
+development.
 
 ### URL and source settings
 
@@ -45,28 +48,34 @@ URL in the UI. The capture window path below does not need the URL.
 
 ### Audio and the autoplay workaround
 
-Browsers block audio until a user gesture. The overlay therefore starts muted
-on purpose; the capture page and a normal browser both show an **Unmute audio**
-button.
+The stream starts unmuted. Audio is controlled from the Electron dashboard (or
+the same dashboard in a browser for `npm run dev:web`): the **Stream audio**
+panel has a mute toggle and volume slider, and the state is pushed to every
+overlay client.
 
 1. In the Browser Source properties, enable **Control audio via OBS** (OBS 28+)
    so the overlay appears in the OBS audio mixer.
-2. Right-click the source → **Interact**.
-3. Click **Unmute audio**. If the first click was blocked, click **Retry audio**.
-4. Confirm the overlay's `sound` status changes from `muted`/`blocked` to
-   `running` and the OBS audio meter moves.
-5. If audio still does not reach the stream, check **Advanced Audio Properties**
+2. If OBS blocks autoplay, right-click the source → **Interact** and click the
+   game picture once. The clean overlay has no visible button; any click retries
+   `AudioContext.resume()`.
+3. Use the dashboard to mute/unmute or change volume. Confirm the OBS audio meter
+   moves while the stream is unmuted.
+4. If audio still does not reach the stream, check **Advanced Audio Properties**
    and confirm the source is not muted and is routed to the intended track.
 
 If **Control audio via OBS** is unavailable, leave it off and capture the OBS
-desktop/application audio instead; the overlay still needs the Interact →
-Unmute step.
+desktop/application audio instead; the overlay still needs the one-time
+click-to-unlock step when the browser blocks autoplay. Opening
+`/overlay?client=preview` locally shows the playback state and an **Unmute
+audio** button for diagnosis.
 
 ### Browser Source checklist
 
 - [ ] Canvas shows the emulator picture at the native aspect ratio.
-- [ ] Status is `running`, frames increase, and the FPS value is near 60.
-- [ ] Audio chunks increase and the mixer meter moves after unmute.
+- [ ] No debug counters, status chips, ticker, or audio buttons are visible.
+- [ ] Audio chunks increase and the mixer meter moves while the dashboard is
+      unmuted.
+- [ ] Dashboard mute/volume changes reach the Browser Source.
 - [ ] The overlay reconnects after a page refresh (full reconnect policy is
       P1-10/P1-41).
 - [ ] Transparent background and HUD options (P1-14) are not expected yet.
@@ -94,10 +103,10 @@ quit the app while the dashboard is open. Window bounds are not persisted yet
 (P1-24).
 
 The window sets Electron's autoplay policy to
-`no-user-gesture-required`, so the audio context may start without a click.
-The overlay still starts muted: click **Unmute audio** once in the capture
-window (click the window itself, not the OBS preview). The `sound` status must
-read `running`.
+`no-user-gesture-required`, so audio starts without a click and the stream is
+unmuted by default. Use the dashboard's **Stream audio** controls to mute,
+unmute, or change volume; there are no controls in the captured window itself.
+The capture surface is stream-clean (canvas only).
 
 ### Linux (X11 and Wayland)
 
@@ -135,7 +144,11 @@ read `running`.
 - [ ] OBS lists the window by its stable title on Linux and Windows.
 - [ ] Picture is 160 × 144 for GB/GBC or 240 × 160 for GBA, scaled without
       blurring (the overlay uses pixelated rendering).
-- [ ] Audio reaches the stream after **Unmute audio**; status is `running`.
+- [ ] The captured window shows no debug counters, status chips, ticker, or
+      audio buttons.
+- [ ] Audio reaches the stream while the dashboard is unmuted; dashboard mute
+      and volume changes apply immediately.
+- [ ] Local dashboard buttons and keyboard shortcuts move the game.
 - [ ] Closing the capture window leaves the dashboard open; reopening focuses
       or recreates it.
 - [ ] No orphan Electron, server, or node-mgba process remains after quitting.
@@ -150,7 +163,8 @@ Run this on both platforms before a release:
 - [ ] Windows: Window Capture video + Application Audio Capture.
 - [ ] Capture window title remains stable through a page-title change and a
       server reconnect.
-- [ ] Audio unmute workaround works through OBS **Interact** for Browser Source.
+- [ ] Audio control from the dashboard works without interacting with the
+      captured window.
 - [ ] 60 FPS overlay for at least 10 minutes on GB and GBA without runaway CPU
       or dropped frames.
 - [ ] OBS scene switch does not stop the emulator or disconnect the overlay.

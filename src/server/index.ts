@@ -5,6 +5,8 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { loadConfig, HelpRequested } from '../shared/config';
 import { createApp } from './app';
+import { AudioService } from './audio/service';
+import { selectChatSource } from './chat/policy';
 import { ChatService } from './chat/service';
 import { ensureDataLayout, type DataLayout } from './data-dirs';
 import { EmulatorService } from './emulator/service';
@@ -80,16 +82,13 @@ async function main(): Promise<void> {
   });
 
   const chat = new ChatService(logger, {
-    selectSource: (channel) => {
-      // Tests are always deterministic and never touch the network.
-      if (config.test) return 'fake';
-      if (config.dev) {
-        if (config.chat.source === 'twitch') return channel ? 'twitch' : 'none';
-        return 'fake';
-      }
-      if (config.chat.source === 'fake') return 'none';
-      return channel ? 'twitch' : 'none';
-    },
+    selectSource: (channel) =>
+      selectChatSource({
+        dev: config.dev,
+        test: config.test,
+        preference: config.chat.source,
+        channel,
+      }),
   });
 
   await chat.applyChannel(config.channel ?? settings.get().channel ?? null);
@@ -105,6 +104,7 @@ async function main(): Promise<void> {
   const input = new InputService(logger, emulator, chat, config.timings, {
     bareCommands: config.chat.bareCommands,
   });
+  const audio = new AudioService(logger);
 
   const httpServer = createServer();
   let appContext;
@@ -120,6 +120,7 @@ async function main(): Promise<void> {
       settings,
       chat,
       input,
+      audio,
     );
   } catch (error) {
     logger.error(`Failed to initialize server: ${(error as Error).message}`);
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
     emulator,
     chat,
     input,
+    audio,
   });
 
   httpServer.on('error', (error: NodeJS.ErrnoException) => {

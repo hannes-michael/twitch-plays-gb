@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
@@ -18,6 +19,16 @@ interface CaptureWindowInfo {
   visible: boolean;
 }
 
+interface InputSnapshot {
+  lastExecuted: { button: string; user: string } | null;
+}
+
+interface EmulatorSnapshot {
+  status: string;
+  videoFrames: number;
+  audioChunks: number;
+}
+
 async function readWindows(app: ElectronApplication): Promise<CaptureWindowInfo[]> {
   return app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((window) => ({
@@ -30,9 +41,12 @@ async function readWindows(app: ElectronApplication): Promise<CaptureWindowInfo[
   );
 }
 
-async function findCapturePage(app: ElectronApplication): Promise<Page | undefined> {
-  const pages = app.windows();
-  return pages.find((page) => page.url().includes('/overlay?client=capture'));
+function findCapturePage(app: ElectronApplication): Page | undefined {
+  return app.windows().find((page) => page.url().includes('/overlay?client=capture'));
+}
+
+function findDashboardPage(app: ElectronApplication): Page | undefined {
+  return app.windows().find((page) => !page.url().includes('/overlay'));
 }
 
 test.describe('electron capture window', () => {
@@ -40,10 +54,29 @@ test.describe('electron capture window', () => {
     execSync('npm run build:desktop', { cwd: repoRoot, stdio: 'inherit' });
   });
 
-  test('opens a stable, black, audio-capable capture window and reopens it from the menu', async ({
+  test('opens a clean capture window with audio and local input controlled from the dashboard', async ({
     server,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(150_000);
+
+    // Give the dashboard persisted settings so it mounts the real dashboard
+    // instead of the first-run wizard.
+    const gbBytes = await readFile(join(romDir, 'test_gb.gb'));
+    const importResponse = await server.request.post('/api/roms', {
+      headers: { 'content-type': 'application/octet-stream', 'x-filename': 'test_gb.gb' },
+      data: gbBytes,
+    });
+    expect(importResponse.status(), await importResponse.text()).toBe(201);
+    const imported = (await importResponse.json()) as { rom: { id: string } };
+    const settingsResponse = await server.request.post('/api/settings', {
+      data: { channel: 'example_channel', romId: imported.rom.id },
+    });
+    expect(settingsResponse.status(), await settingsResponse.text()).toBe(200);
+
+    const readStatus = async (): Promise<EmulatorSnapshot> =>
+      (await (await server.request.get('/api/emulator/status')).json()) as EmulatorSnapshot;
+    const readInput = async (): Promise<InputSnapshot> =>
+      (await (await server.request.get('/api/input/state')).json()) as InputSnapshot;
 
     let app: ElectronApplication | undefined;
     const pageErrors: string[] = [];
@@ -92,8 +125,27 @@ test.describe('electron capture window', () => {
       if (!capturePage) throw new Error('Capture window page was not found');
       trackPage(capturePage);
 
+      await expect
+        .poll(async () => (await findDashboardPage(app as ElectronApplication)) !== undefined, {
+          timeout: 20_000,
+        })
+        .toBe(true);
+      const dashboardPage = await findDashboardPage(app);
+      expect(dashboardPage).toBeDefined();
+      if (!dashboardPage) throw new Error('Dashboard page was not found');
+      trackPage(dashboardPage);
+      await expect(dashboardPage.getByTestId('server-status-label')).toHaveText('online');
+      await expect(dashboardPage.getByTestId('stream-audio-panel')).toBeVisible();
+
+      // The capture surface is stream-clean: the game canvas only.
+      const captureRoot = capturePage.getByTestId('overlay-root');
+      await expect(captureRoot).toHaveAttribute('data-overlay-client', 'capture');
       await expect(capturePage.getByTestId('overlay-canvas')).toBeVisible();
-      await expect(capturePage.getByTestId('emulator-status')).toHaveText('running');
+      await expect(capturePage.getByTestId('overlay-hud')).toHaveCount(0);
+      await expect(capturePage.getByTestId('emulator-status')).toHaveCount(0);
+      await expect(capturePage.getByTestId('frame-count')).toHaveCount(0);
+      await expect(capturePage.getByTestId('audio-count')).toHaveCount(0);
+      await expect(capturePage.getByTestId('unmute-audio')).toHaveCount(0);
 
       await expect
         .poll(
@@ -115,17 +167,45 @@ test.describe('electron capture window', () => {
         visible: true,
       });
 
-      // The capture window is configured with
-      // autoplayPolicy: 'no-user-gesture-required'. Electron does not expose
-      // that preference back through getLastWebPreferences(), so verify the
-      // observable effect: an AudioContext starts running without a gesture.
-      const audioContextState = await capturePage.evaluate(async () => {
-        const context = new AudioContext();
-        const state = context.state;
-        await context.close();
-        return state;
-      });
-      expect(audioContextState).toBe('running');
+      // The capture window has autoplay enabled, so the default unmuted stream
+      // starts without a click.
+      await expect
+        .poll(async () => (await readStatus()).audioChunks, { timeout: 20_000 })
+        .toBeGreaterThan(0);
+      await expect(captureRoot).toHaveAttribute('data-audio-state', 'running');
+
+      // Audio is controlled from the Electron dashboard and reaches the
+      // capture window over the server WebSocket.
+      await expect(dashboardPage.getByTestId('stream-audio-status')).toHaveAttribute(
+        'data-audio-muted',
+        'false',
+      );
+      await dashboardPage.getByTestId('toggle-stream-audio').click();
+      await expect(dashboardPage.getByTestId('stream-audio-status')).toHaveAttribute(
+        'data-audio-muted',
+        'true',
+      );
+      await expect(captureRoot).toHaveAttribute('data-audio-state', 'muted');
+      await expect
+        .poll(async () => {
+          const response = await server.request.get('/api/audio');
+          return ((await response.json()) as { muted: boolean }).muted;
+        })
+        .toBe(true);
+
+      await dashboardPage.getByTestId('toggle-stream-audio').click();
+      await expect(dashboardPage.getByTestId('stream-audio-status')).toHaveAttribute(
+        'data-audio-muted',
+        'false',
+      );
+      await expect(captureRoot).toHaveAttribute('data-audio-state', 'running');
+
+      // Local input from the dashboard queues and executes without chat.
+      await expect(dashboardPage.getByTestId('local-input-RIGHT')).toBeEnabled();
+      await dashboardPage.getByTestId('local-input-RIGHT').click();
+      await expect.poll(async () => (await readInput()).lastExecuted?.button).toBe('RIGHT');
+      await expect.poll(async () => (await readInput()).lastExecuted?.user).toBe('local');
+      await expect(dashboardPage.getByTestId('dashboard-recent-inputs')).toContainText('local');
 
       // The document title must not override the stable OBS window title.
       await capturePage.evaluate(() => {
@@ -153,26 +233,13 @@ test.describe('electron capture window', () => {
         )
         .toEqual([160, 144]);
 
-      const frameCount = capturePage.getByTestId('frame-count');
       await expect
-        .poll(async () => Number(await frameCount.textContent()), { timeout: 20_000 })
+        .poll(async () => (await readStatus()).videoFrames, { timeout: 20_000 })
         .toBeGreaterThan(0);
-      const firstFrameCount = Number(await frameCount.textContent());
+      const firstFrameCount = (await readStatus()).videoFrames;
       await expect
-        .poll(async () => Number(await frameCount.textContent()), { timeout: 20_000 })
+        .poll(async () => (await readStatus()).videoFrames, { timeout: 20_000 })
         .toBeGreaterThan(firstFrameCount);
-
-      await expect
-        .poll(async () => Number(await capturePage.getByTestId('audio-count').textContent()), {
-          timeout: 20_000,
-        })
-        .toBeGreaterThan(0);
-
-      const audioState = capturePage.getByTestId('audio-state');
-      if ((await audioState.getAttribute('data-audio-state')) !== 'running') {
-        await capturePage.getByTestId('unmute-audio').click();
-      }
-      await expect(audioState).toHaveAttribute('data-audio-state', 'running');
 
       // Closing the capture window leaves the dashboard running. The menu item
       // reopens (or focuses) the capture window.
@@ -203,6 +270,7 @@ test.describe('electron capture window', () => {
       if (!reopenedPage) throw new Error('Reopened capture window page was not found');
       trackPage(reopenedPage);
       await expect(reopenedPage.getByTestId('overlay-canvas')).toBeVisible();
+      await expect(reopenedPage.getByTestId('overlay-hud')).toHaveCount(0);
       await expect
         .poll(
           async () =>

@@ -171,3 +171,33 @@ No architecture change is required for Linux. If Windows Electron-as-Node or
 the native ABI fails, ADR-006's fallback to a bundled Node 22 server runtime
 remains the contingency; no fallback is used on Linux. No P1 features were
 implemented in this cycle.
+
+## ADR-009: Stream-clean overlays with server-owned controls
+
+**Status:** accepted (2026-10-25)
+
+The `obs` and `capture` overlay clients render only the emulator canvas. The
+diagnostic HUD (status, FPS, frame/audio/WS counters, mode/queue, ticker, audio
+buttons) is limited to `client=preview` (and the default no-client browser
+view). This keeps OBS Browser Source and Window Capture output free of debug
+information.
+
+Audio is a single server-owned control (`{ muted, volume }`) exposed through
+`GET`/`POST /api/audio` and broadcast as `audio-state` over the media WebSocket.
+The dashboard changes it; every overlay applies it. This avoids Electron IPC
+between windows and also works for OBS browser sources and browser-only dev.
+Streams start unmuted, and a clean overlay retries `AudioContext.resume()` on
+any click when the browser blocks autoplay. In Electron the capture window uses
+`autoplayPolicy: 'no-user-gesture-required'`, so it starts audible.
+
+Local operator input is `POST /api/input` with a validated button. It enters the
+same bounded FIFO queue as chat (`source: "local"`, user `local`) but bypasses
+per-user cooldowns and the global chat rate cap. The dashboard exposes buttons
+and keyboard shortcuts, and reports `not-running`/`queue-full` rejections
+instead of creating unbounded backpressure.
+
+Development chat policy now matches production when a channel is configured:
+dev sessions use anonymous read-only Twitch chat. Without a channel, dev falls
+back to the fake source for the developer panel. Test mode always uses fake
+chat, and `TPG_CHAT=fake` remains an explicit dev override. This makes manual
+dev sessions exercise real chat without a separate flag.

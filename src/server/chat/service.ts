@@ -34,9 +34,10 @@ export class ChatUnavailableError extends Error {
 
 /**
  * Owns the active chat source, a bounded recent-message log, and subscribers.
- * Source selection is supplied by the server mode policy; test/dev normally
- * starts the fake source, while production starts anonymous Twitch chat when a
- * channel is configured. Chat failures only affect status, never emulation.
+ * Source selection is supplied by the server mode policy: tests always use the
+ * fake source, development falls back to fake only until a channel is
+ * configured, and production starts anonymous Twitch chat when a channel is
+ * present. Chat failures only affect status, never emulation.
  *
  * Source transitions are serialized and generation-tagged. A transition that
  * was superseded while awaiting close/start aborts, so two overlapping channel

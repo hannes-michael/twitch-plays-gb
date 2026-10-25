@@ -42,6 +42,11 @@ interface EmulatorStatus {
   lastError: string | null;
 }
 
+interface InputSnapshot {
+  lastExecuted: { button: string; user: string } | null;
+  recent: Array<{ user: string; button: string; source: string; status: string }>;
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -79,6 +84,11 @@ test.describe('first-run setup and ROM import', () => {
       const response = await server.request.get(`${server.baseURL}/api/emulator/status`);
       expect(response.status()).toBe(200);
       return (await response.json()) as EmulatorStatus;
+    };
+    const readInput = async (): Promise<InputSnapshot> => {
+      const response = await server.request.get(`${server.baseURL}/api/input/state`);
+      expect(response.status()).toBe(200);
+      return (await response.json()) as InputSnapshot;
     };
 
     // Step 1: legal notice, channel, and no persisted configuration yet.
@@ -222,16 +232,94 @@ test.describe('first-run setup and ROM import', () => {
 
     await expect(page.getByTestId('open-overlay')).toHaveAttribute('href', '/overlay?client=obs');
 
+    // Stream audio is controlled from the desktop/browser dashboard, not from
+    // the clean OBS browser source.
+    const audioPanel = page.getByTestId('stream-audio-panel');
+    await expect(audioPanel).toBeVisible();
+    await expect(page.getByTestId('stream-audio-status')).toHaveAttribute(
+      'data-audio-muted',
+      'false',
+    );
+    await page.getByTestId('toggle-stream-audio').click();
+    await expect(page.getByTestId('stream-audio-status')).toHaveAttribute(
+      'data-audio-muted',
+      'true',
+    );
+    await expect(page.getByTestId('toggle-stream-audio')).toHaveText('Unmute stream');
+    await expect
+      .poll(async () => {
+        const response = await server.request.get(`${server.baseURL}/api/audio`);
+        return ((await response.json()) as { muted: boolean }).muted;
+      })
+      .toBe(true);
+
+    await page.getByTestId('stream-audio-volume').evaluate((element) => {
+      const input = element as HTMLInputElement;
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+      setValue?.call(input, '40');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(page.getByTestId('stream-audio-volume-value')).toHaveText('40%');
+    await expect
+      .poll(async () => {
+        const response = await server.request.get(`${server.baseURL}/api/audio`);
+        return ((await response.json()) as { volume: number }).volume;
+      })
+      .toBe(0.4);
+
+    await page.getByTestId('toggle-stream-audio').click();
+    await expect(page.getByTestId('stream-audio-status')).toHaveAttribute(
+      'data-audio-muted',
+      'false',
+    );
+
+    // Local controls enqueue operator input through the same bounded queue,
+    // without the chat cooldown or rate cap.
+    const localInput = page.getByTestId('local-input');
+    await expect(localInput).toBeVisible();
+    await expect(page.getByTestId('local-input-RIGHT')).toBeEnabled();
+    await page.getByTestId('local-input-RIGHT').click();
+    await expect.poll(async () => (await readInput()).lastExecuted?.button).toBe('RIGHT');
+    await expect.poll(async () => (await readInput()).lastExecuted?.user).toBe('local');
+    const localState = await readInput();
+    expect(localState.recent.at(-1)).toMatchObject({
+      user: 'local',
+      button: 'RIGHT',
+      source: 'local',
+    });
+    await expect(page.getByTestId('dashboard-recent-inputs')).toContainText('local');
+
+    // Keyboard shortcuts work when focus is not in a form control.
+    await page.getByRole('heading', { name: 'Ready to play' }).click();
+    await page.keyboard.press('ArrowUp');
+    await expect.poll(async () => (await readInput()).lastExecuted?.button).toBe('UP');
+
+    const invalidInput = await server.request.post(`${server.baseURL}/api/input`, {
+      data: { button: 'TURBO' },
+    });
+    expect(invalidInput.status()).toBe(400);
+
     // Stop, start, and restart are serialized and reflected in UI and API.
     await page.getByTestId('stop-emulator').click();
     await expect(page.getByTestId('emulator-status')).toHaveText('stopped');
     await expect.poll(async () => (await readStatus()).status).toBe('stopped');
+    await expect(page.getByTestId('local-input-A')).toBeDisabled();
+    const stoppedInput = await server.request.post(`${server.baseURL}/api/input`, {
+      data: { button: 'A' },
+    });
+    expect(stoppedInput.status()).toBe(200);
+    expect(await stoppedInput.json()).toMatchObject({
+      accepted: false,
+      reason: 'not-running',
+    });
 
     await page.getByTestId('start-emulator').click();
     await expect(page.getByTestId('emulator-status')).toHaveText('running', {
       timeout: 30_000,
     });
     await expect.poll(async () => (await readStatus()).status, { timeout: 30_000 }).toBe('running');
+    await expect(page.getByTestId('local-input-A')).toBeEnabled();
 
     const beforeRestart = await readStatus();
     await expect

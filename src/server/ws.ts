@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { InputState } from '../shared/input';
 import { MEDIA_PROTOCOL_VERSION } from '../shared/media-protocol';
+import type { AudioService } from './audio/service';
 import type { ChatService } from './chat/service';
 import type { EmulatorService } from './emulator/service';
 import type { InputService } from './input/service';
@@ -25,6 +26,8 @@ export interface WebSocketServerOptions {
   chat: ChatService;
   /** Input queue state and broadcast source. */
   input: InputService;
+  /** Shared stream-audio control and broadcast source. */
+  audio: AudioService;
 }
 
 function rejectUpgrade(socket: Duplex): void {
@@ -135,12 +138,16 @@ export function createWebSocketServer(
   const unsubscribeInput = options.input.subscribe((inputState) => {
     queueInputState(inputState);
   });
+  const unsubscribeAudio = options.audio.subscribe((audio) => {
+    broadcast({ type: 'audio-state', audio });
+  });
 
   httpServer.on('upgrade', handleUpgrade);
   wss.on('close', () => {
     unsubscribeEmulator();
     unsubscribeChat();
     unsubscribeInput();
+    unsubscribeAudio();
     if (inputStateTimer) {
       clearTimeout(inputStateTimer);
       inputStateTimer = null;
@@ -157,6 +164,7 @@ export function createWebSocketServer(
     socket.send(JSON.stringify({ type: 'state', emulator: options.emulator.status() }));
     socket.send(JSON.stringify({ type: 'chat-status', chat: options.chat.getStatus() }));
     socket.send(JSON.stringify({ type: 'input-state', input: options.input.getState() }));
+    socket.send(JSON.stringify({ type: 'audio-state', audio: options.audio.getState() }));
     options.emulator.attachClient(socket);
 
     socket.on('close', () => {

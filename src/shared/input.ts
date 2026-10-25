@@ -86,3 +86,11 @@ export interface InputStateMessage {
   type: 'input-state';
   input: InputState;
 }
+
+export type LocalInputRejection = InputDropReason | 'not-running';
+
+export interface LocalInputResponse {
+  accepted: boolean;
+  reason?: LocalInputRejection;
+  input: InputState;
+}

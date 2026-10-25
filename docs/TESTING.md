@@ -116,19 +116,22 @@ test.use({
 
 `emulator-boot.spec.ts` boots GB, GBC, and GBA in one scenario and checks model,
 native dimensions, frame/audio counters, 48 kHz audio, and `/health`.
-`overlay-media.spec.ts` loads `/overlay?client=obs`, checks canvas dimensions
-and pixels, growing counters, and the click-to-unmute audio path. Both wait on
-real status/counters with `expect.poll`; do not replace them with sleeps.
+`overlay-media.spec.ts` loads `/overlay?client=obs`, asserts the stream-clean
+canvas (no HUD/debug counters/buttons), checks pixel output and growing server
+media counters, and drives mute/volume through `/api/audio`. It then loads
+`/overlay?client=preview` and confirms the diagnostic HUD still receives video
+and audio counters. Both wait on real status/counters with `expect.poll`; do not
+replace them with sleeps.
 `chat-input.spec.ts` drives the real GB ROM and fake chat source through the
 developer injection endpoint. It proves FIFO execution, per-user cooldown,
 global rate cap, queue overflow, queue drain after start, stale drop, and the
-overlay input ticker. A second scenario proves bots/self messages, bare commands
+preview input ticker. A second scenario proves bots/self messages, bare commands
 (with bare mode off), invalid text, and meta commands are ignored; it then
 disconnects the fake source through `/api/test/chat/outage`, checks `/api/chat`
 and debug status while video/audio counters keep growing, reconnects, and
-executes a command. Focused safeguards cover Twitch `bot-badge`/known-bot
-mapping, overlapping chat-source transitions, and input-state WS coalescing.
-No test connects to real Twitch.
+executes a command. Focused safeguards cover the dev/production chat-source
+policy, Twitch `bot-badge`/known-bot mapping, overlapping chat-source
+transitions, and input-state WS coalescing. No test connects to real Twitch.
 
 `saves.spec.ts` reuses one temp data directory across server restarts with
 `TPG_AUTOSAVE_INTERVAL_MS=250`. It waits for two autosaved generations
@@ -156,9 +159,10 @@ channel step, rejects invalid ROM uploads, imports the vendored GB ROM through
 the file input, reviews and finishes setup, and then drives Stop, Start, and
 Restart from the dashboard. It asserts persisted settings, server-generated
 `roms/<id>.gb` filenames, duplicate deduplication, no absolute paths in API
-payloads, and no renderer page/console errors. `app-launch.spec.ts` separately
-checks that Continue advances to ROM import without writing settings before
-Finish.
+payloads, and no renderer page/console errors. It also exercises dashboard
+stream-audio mute/volume, local D-pad and keyboard input, rejection while
+stopped, and invalid button validation. `app-launch.spec.ts` separately checks
+that Continue advances to ROM import without writing settings before Finish.
 
 Production-mode checks use `startServer({ mode: 'production' })`, which runs the
 built `dist/server/index.js` with `TPG_TEST=0` against `dist/web`. The production
@@ -197,8 +201,11 @@ forwarding list also includes the input cooldown/queue/rate/stale values,
 `TPG_AUTOSAVE_INTERVAL_MS`, bare commands, and chat source policy.
 `capture-window.electron.spec.ts` uses the external server fixture with
 `TPG_CAPTURE=1`, finds the window titled `Twitch Plays GB Capture`, and checks
-the stable title, black 960 × 540 bounds, 160 × 144 canvas, growing frames,
-audio unlock, and reopening from the application menu.
+the stable title, black 960 × 540 bounds, stream-clean 160 × 144 canvas, growing
+frames, and reopening from the application menu. The dashboard (seeded with
+settings through the public API) controls mute/volume and local input; the test
+asserts those changes reach the capture window over the WebSocket and the
+server input queue.
 
 Electron needs a display. On Linux CI this suite runs under
 `xvfb-run -a`. The launch adds `--no-sandbox` only when `CI` is set; production
@@ -257,8 +264,10 @@ uploads logs/artifacts on failure.
 
 ## Fake chat and developer panel (P0-10/P0-11/P0-15)
 
-Servers started with `TPG_DEV=1` or `TPG_TEST=1` start a fake chat source and
-expose three developer-only routes:
+Servers started with `TPG_DEV=1` or `TPG_TEST=1` expose the developer-only
+routes below. Test mode always uses a fake chat source. Development uses the
+fake source only until a channel is configured; with a channel it connects to
+real anonymous Twitch chat, and `TPG_CHAT=fake` forces fake chat.
 
 - `GET /api/debug` returns mode, resolved timings, emulator save state/media
   counters, chat status plus recent messages, the full input state/stats, WS
@@ -275,7 +284,9 @@ expose three developer-only routes:
 `GET /api/input/state` exposes the input queue/stats and `GET /api/chat` exposes
 the current chat status. Both are read-only and available in production for the
 dashboard. Input state is also pushed over the WebSocket as `input-state` on
-connect and on every change.
+connect and on every change. `POST /api/input` (local operator input) and
+`GET`/`POST /api/audio` (stream mute/volume) are normal dashboard endpoints
+available in every mode; audio changes are broadcast as `audio-state`.
 
 The dashboard mounts the **Developer** panel only when `/health` reports dev/test
 mode, then renders it once `/api/debug` answers 200. Production never requests
