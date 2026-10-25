@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +80,32 @@ test.describe('server CLI', () => {
     expect(config.dev).toBe(true);
     expect(config.test).toBe(false);
     expect(config.dataDir).toBe(resolve(repoRoot, 'data', 'dev'));
+  });
+
+  test('rejects non-object timings and fills defaults for partial timing objects', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'tpg-cli-timings-'));
+    const configPath = join(dataDir, 'config.json');
+    const load = () =>
+      loadConfig({
+        argv: ['--data-dir', dataDir, '--config', configPath],
+        env: cleanEnv({ TPG_DEV: '1' }),
+      });
+
+    try {
+      for (const timings of [[], 'bad', null]) {
+        writeFileSync(configPath, JSON.stringify({ timings }));
+        expect(load).toThrow(/Invalid configuration: timings/);
+      }
+
+      writeFileSync(configPath, JSON.stringify({ timings: { democracyWindowMs: 900 } }));
+      expect(load().timings).toEqual({
+        democracyWindowMs: 900,
+        holdFrames: 8,
+        releaseFrames: 4,
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   test('rejects missing explicit config paths via CLI and TPG_CONFIG', () => {

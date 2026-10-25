@@ -368,6 +368,10 @@ function readConfigFile(path: string, required: boolean): Record<string, unknown
   return parsed as Record<string, unknown>;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function formatIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => {
@@ -404,22 +408,20 @@ export function loadConfig(options: LoadConfigOptions = {}): AppConfig {
   const fileValues = readConfigFile(configPath, configuredPath !== undefined);
 
   const { config: _configPath, ...cliValues } = cli;
-  const fileTimings =
-    typeof fileValues.timings === 'object' &&
-    fileValues.timings !== null &&
-    !Array.isArray(fileValues.timings)
-      ? (fileValues.timings as Record<string, unknown>)
-      : {};
+  const fileTimings = fileValues.timings;
+  const timingOverrides = { ...envValues.timings, ...cliValues.timings };
   const merged = {
     dataDir: baseDataDir,
     ...fileValues,
     ...envValues,
     ...cliValues,
-    timings: {
-      ...fileTimings,
-      ...envValues.timings,
-      ...cliValues.timings,
-    },
+    // Let Zod reject non-object timing values from JSON instead of silently
+    // replacing them with defaults. A valid partial object is merged with
+    // env/CLI overrides and Zod fills the remaining fields.
+    timings:
+      fileTimings === undefined || isPlainObject(fileTimings)
+        ? { ...(isPlainObject(fileTimings) ? fileTimings : {}), ...timingOverrides }
+        : fileTimings,
   };
 
   const result = ConfigSchema.safeParse(merged);
