@@ -21,16 +21,23 @@ test-results/
 playwright-report/
 blob-report/
 coverage/
+tests/.tmp/
+.cache/
+.eslintcache
 
 # Runtime data, ROMs, and saves
-/roms/
+roms/*.gb
+roms/*.gbc
+roms/*.gba
 data/
+test-data/
 logs/
 *.log
 *.sav
 *.ss0
 *.state
 *.srm
+config/local.json
 
 # Secrets
 .env
