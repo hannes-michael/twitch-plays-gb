@@ -255,8 +255,10 @@ directory.
 ## Packaging and packaged smoke tests
 
 `npm run package:linux` builds the AppImage and `.deb` into `release/`.
-`npm run package:win` builds the NSIS installer and portable `.exe` there. The
-electron-builder config unpacks `dist/**`, `package.json`, and runtime
+`npm run package:win` builds the NSIS installer and portable `.exe` there. Both
+scripts pass `--publish never` so CI's implicit electron-builder publishing
+cannot require a GitHub token. The electron-builder config unpacks `dist/**`,
+`package.json`, and runtime
 `node_modules/**` so the spawned server entry can resolve bare imports and load
 `node-mgba`'s worker and native libraries outside the asar. `release/` is
 git-ignored; never commit build artifacts.
