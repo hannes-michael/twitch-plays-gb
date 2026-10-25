@@ -77,12 +77,12 @@ npm run smoke:packaged -- --linux
 
 The packaged smoke test launches each artifact with `--self-test`, which runs
 the real Electron-as-Node server child without opening any windows. It checks
-the packaged SPA and `/overlay?client=obs`, and with `TPG_ROM` set it waits for
-the native node-mgba worker to produce video frames and 48 kHz audio. On Linux
-it runs the AppImage and `.deb`; add `--unpacked` for a fast
-`release/linux-unpacked` check. Windows targets run on Windows, or with
-`--win --wine` as a best-effort local check. Release artifacts are not
-committed. See `docs/TESTING.md` for the full matrix and options.
+the packaged SPA, `/overlay?client=obs`, and every referenced JS/CSS asset body,
+and with `TPG_ROM` set it waits for the native node-mgba worker's video/audio
+counters to grow at 48 kHz. On Linux it runs the AppImage and `.deb`; add
+`--unpacked` for a fast `release/linux-unpacked` check. Windows targets run on
+Windows, or with `--win --wine` as a best-effort local check. Release artifacts
+are not committed. See `docs/TESTING.md` for the full matrix and options.
 
 ## Commands
 

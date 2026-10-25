@@ -101,15 +101,18 @@ then the data directory before spawning; the child only receives an absolute
 
 **Packaged smoke result (2026-10-25):** go on Linux x64 for both AppImage and
 `.deb`. The headless `--self-test` mode spawns the real server child, serves the
-packaged SPA and `/overlay?client=obs` without Vite, and boots the vendored GB
-ROM through native `node-mgba`/koffi with a worker. Both artifacts reported
-`DMG 160x144`, video frames > 0, audio chunks > 0, and 48000 Hz. The child PID
-was gone after the app exited and temp directories were removed. The harness
-sets inherited `TPG_DEV=1`/`TPG_TEST=1`; the packaged child still logged
-`dev=false test=false`. The AppImage runtime hung with
-`APPIMAGE_EXTRACT_AND_RUN=1` on the development host, so the harness falls back
-to `--appimage-extract` and runs the extracted `AppRun`; this is a test-host
-workaround, not an application change.
+packaged SPA and `/overlay?client=obs` without Vite, fetches every referenced
+JS/CSS body (200, correct content type, non-empty), and rejects missing assets
+with 404. It boots the vendored GB ROM through native `node-mgba`/koffi with a
+worker. Both artifacts reported `DMG 160x144`, video/audio counters that grew
+across a second poll, and 48000 Hz audio. The child PID was gone after the app
+exited and temp directories were removed. The harness sets inherited
+`TPG_DEV=1`/`TPG_TEST=1`; the packaged child still logged `dev=false test=false`.
+The AppImage runtime hung with `APPIMAGE_EXTRACT_AND_RUN=1` on the development
+host, so the harness falls back to `--appimage-extract` and runs the extracted
+`AppRun`; this is a test-host workaround, not an application change. Self-test
+also writes an atomic JSON result file when `TPG_SELF_TEST_RESULT` is set, so
+the NSIS portable wrapper does not have to inherit stdout.
 
 ## ADR-007: Capture window reuses the overlay with a stable OBS title
 
@@ -140,20 +143,25 @@ Proven in this cycle:
   pass the headless packaged smoke test with a real ROM.
 - Electron-as-Node runs the unpacked server entry from both artifacts, loads
   native `node-mgba`/koffi, and runs its worker thread.
-- The packaged server serves the built SPA and `/overlay?client=obs`, never
-  mounts Vite, and ignores inherited `TPG_DEV`/`TPG_TEST`.
-- The emulator reports `DMG 160x144`, growing video/audio counters, and 48000 Hz
-  audio; the server child is stopped and no orphan remains.
+- The packaged server serves the built SPA and `/overlay?client=obs`, every
+  referenced JS/CSS body is non-empty with the expected content type, missing
+  assets return 404, Vite is never mounted, and inherited `TPG_DEV`/`TPG_TEST`
+  are ignored.
+- The emulator reports `DMG 160x144`; video and audio counters both grow across
+  a second status poll, audio is 48000 Hz, the server child is stopped, and no
+  orphan remains.
 - The software side of both OBS paths is covered by E2E: Browser Source
   (`/overlay?client=obs`) and the stable-title capture window. Actual OBS
   capture is still manual.
 
 Remaining before the P0 exit criteria are fully met:
 
-- Build and run the NSIS installer and portable `.exe` on Windows. The
-  `package-smoke.yml` workflow wires this, but it was not executed in this
-  environment. The `--win --wine` path is best effort and is not a substitute
-  for a native Windows run.
+- Build and run the NSIS installer and portable `.exe` on Windows. The harness
+  now uses an atomic `TPG_SELF_TEST_RESULT` file (the portable wrapper does not
+  reliably inherit stdout) and a space-free NSIS `/D` root, and the
+  `package-smoke.yml` workflow wires this. It was not executed in this
+  environment; `--win --wine` is best effort and is not a substitute for a
+  native Windows run.
 - Execute the OBS checklist in `docs/OBS.md` on Linux X11/Wayland and Windows.
 - Re-run the packaged smoke on a host where the AppImage runtime works directly;
   the harness already tries `APPIMAGE_EXTRACT_AND_RUN=1` first and only falls

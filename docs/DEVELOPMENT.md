@@ -155,8 +155,11 @@ npm run smoke:packaged -- --win --wine         # best effort on Linux
 The harness invokes each app with `--self-test` (the app also accepts
 `TPG_SELF_TEST=1`). Self-test mode opens no dashboard or capture window, builds
 no menu, and shows no dialogs. It still spawns the real server child through
-Electron-as-Node, serves the packaged web assets, and, when `TPG_ROM` is set,
-boots the native node-mgba worker. It prints a machine-readable line such as:
+Electron-as-Node, fetches the packaged SPA plus every referenced JS/CSS body,
+and, when `TPG_ROM` is set, boots the native node-mgba worker. With a ROM it
+also polls `/api/emulator/status` twice and requires both video and audio
+counters to grow, not merely be non-zero. It prints a machine-readable line
+such as:
 
 ```text
 TPG_SELF_TEST_OK packaged=1 rom=1 model=DMG size=160x144 frames=... audio=... sampleRate=48000 pid=...
@@ -165,7 +168,7 @@ TPG_SELF_TEST_OK packaged=1 rom=1 model=DMG size=160x144 frames=... audio=... sa
 A failure prints `TPG_SELF_TEST_FAIL reason=...` plus the server log tail and
 exits non-zero. The app stops the server child before exiting.
 
-Self-test data handling:
+Self-test data and result handling:
 
 - `TPG_DATA_DIR` is used when set; otherwise a temp directory under the OS temp
   directory is created and removed on exit. The harness always passes its own
@@ -173,6 +176,12 @@ Self-test data handling:
 - `TPG_ROM` is resolved like the normal spawn path (absolute, then relative to
   the working directory or data directory) and passed to the child as an
   absolute `--rom`. Without it the server/UI checks still run.
+- `TPG_SELF_TEST_RESULT` selects an optional JSON result file. The app writes
+  it atomically before exiting, with status, packaged/rom flags, model, size,
+  frame/audio counters, sample rate, PID, and failure reason. The harness sets
+  this for every target and treats the file as the machine-readable channel;
+  this is required because the NSIS portable wrapper does not reliably inherit
+  stdout. The app still prints the same result to stdout when possible.
 - Packaged self-test forces the child to production mode (`TPG_DEV=0`,
   `TPG_TEST=0`) and verifies the logs/HTML contain no Vite middleware. The
   harness sets `TPG_DEV=1` and `TPG_TEST=1` on purpose to prove they are
@@ -190,11 +199,13 @@ The harness adds `--no-sandbox` only when the host is root or Chromium reports a
 sandbox failure. Production Electron code never adds `--no-sandbox`.
 
 Windows targets require Windows or `--wine`. The portable executable is run
-directly. The NSIS installer is installed silently to a temp directory
+directly. The NSIS installer is installed silently to a space-free temp root
 (`/S /D=<dir>`, `/D` last), the installed app runs `--self-test`, and the
-uninstaller is invoked. Installer automation under Wine is best effort; the
-harness reports a failure rather than converting it into a pass. The
-`.github/workflows/package-smoke.yml` workflow runs the native Windows path.
+uninstaller is invoked. `/D` does not tolerate quoted paths, so the harness
+rejects an install directory containing whitespace. Installer automation under
+Wine is best effort; the harness reports a failure rather than converting it
+into a pass. The `.github/workflows/package-smoke.yml` workflow runs the native
+Windows path.
 
 Cross-building Windows packages on Linux is not a supported validation path.
 electron-builder's NSIS uninstaller step runs an intermediate installer under

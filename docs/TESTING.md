@@ -160,20 +160,28 @@ It still spawns the real server child through Electron-as-Node and checks:
 - the child has a real PID and `/health` is healthy;
 - `GET /` and `GET /overlay?client=obs` return 200 HTML from the packaged
   assets, not Vite middleware;
+- every referenced `<script src>`, stylesheet, and modulepreload URL returns
+  200 with a JS/CSS content type and a non-empty body, and a missing
+  `/assets/...` request returns 404;
 - the child logs show `dev=false test=false` even when the harness exports
   `TPG_DEV=1`/`TPG_TEST=1`;
 - with `TPG_ROM`, `/api/emulator/status` becomes `running` with a model and
-  native dimensions, growing video/audio counters, and 48000 Hz audio;
+  native dimensions, both video and audio counters grow across a second poll,
+  and audio is 48000 Hz;
 - the child exits and its PID is gone after the app exits.
 
-The harness sets `TPG_DATA_DIR` to a temp directory and `TPG_ROM` to the
-vendored GB ROM, and removes both the data directory and any extraction
-directory afterwards. `--no-rom` checks the server/UI path without the emulator.
-Linux uses `xvfb-run -a` when no display is set and it is installed. The
-AppImage is first attempted with `APPIMAGE_EXTRACT_AND_RUN=1`; if the runtime
-hangs before launching, the harness extracts it with `--appimage-extract` and
-runs the extracted `AppRun`. The `.deb` is extracted with `dpkg-deb` or
-`ar` + `tar`.
+The harness sets `TPG_DATA_DIR` to a temp directory, `TPG_ROM` to the vendored
+GB ROM, and `TPG_SELF_TEST_RESULT` to a JSON result path for every target. The
+app writes the result file atomically before exiting; the harness validates
+that file instead of relying on stdout, which the NSIS portable wrapper does
+not reliably inherit. It removes the data directory, result file, extraction
+directory, and installer directory afterwards. `--no-rom` checks the
+server/UI path without the emulator. Linux uses `xvfb-run -a` when no display
+is set and it is installed. The AppImage is first attempted with
+`APPIMAGE_EXTRACT_AND_RUN=1`; if the runtime hangs before launching, the
+harness extracts it with `--appimage-extract` and runs the extracted `AppRun`.
+The `.deb` is extracted with `dpkg-deb` or `ar` + `tar`. The NSIS installer uses
+a space-free install root because `/D` does not accept quoted paths.
 
 The harness adds `--no-sandbox` only when the host is root or Chromium reports a
 sandbox failure. This is a test-runner workaround, never a production default.
