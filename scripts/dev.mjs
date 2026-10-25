@@ -4,6 +4,7 @@ import {
   buildDesktop,
   fetchHealth,
   killTree,
+  liveChildProcesses,
   repoRoot,
   spawnElectron,
   spawnPrefixed,
@@ -235,7 +236,7 @@ async function shutdown(code, reason) {
   watcher = undefined;
   electronExitExpected = true;
 
-  const children = [electronProcess, serverProcess].filter(Boolean);
+  const children = liveChildProcesses();
   for (const child of children) {
     killTree(child, 'SIGTERM');
   }

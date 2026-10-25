@@ -21,6 +21,7 @@
         "runtimeExecutable": "${workspaceFolder}/node_modules/electron/dist/electron.exe"
       },
       "program": "${workspaceFolder}/dist/desktop/main.cjs",
+      "runtimeArgs": ["--user-data-dir=${workspaceFolder}/data/dev/electron"],
       "preLaunchTask": "build:desktop",
       "env": { "TPG_SERVER_URL": "http://127.0.0.1:3000" },
       "cwd": "${workspaceFolder}",

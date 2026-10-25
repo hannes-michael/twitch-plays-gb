@@ -42,7 +42,9 @@ reconnects through its health poll. If Electron exits, the dev command shuts
 the server down and exits instead of restarting in a loop.
 
 Child output is prefixed with `[server]`, `[build]`, `[electron]`, or `[dev]`.
-The server logs its resolved data directory on startup.
+The server logs its resolved data directory on startup. Vite's HMR WebSocket is
+served by that same server on `/__vite_hmr`, so concurrent dev/test servers do
+not share a fixed HMR port.
 
 ## Commands
 
@@ -124,7 +126,8 @@ Open the repository folder and use the Run and Debug view:
 Start `Server (dev, tsx)` first if you want to debug the Electron window; the
 Electron configuration's pre-launch task builds `dist/desktop` but does not
 start the server. The Electron window loads `TPG_SERVER_URL`, which defaults to
-`http://127.0.0.1:3000`.
+`http://127.0.0.1:3000`, and keeps its Chromium profile in
+`data/dev/electron` like the other dev commands.
 
 For the one-command workflow, use `npm run dev` in a terminal instead.
 

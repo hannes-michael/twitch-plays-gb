@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 export const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
+const liveChildren = new Set();
+
+export function liveChildProcesses() {
+  return [...liveChildren];
+}
 
 export function electronExecutable() {
   return require('electron');
@@ -47,6 +52,9 @@ export function spawnPrefixed(name, command, args, options = {}) {
 
   prefixStream(child.stdout, name, onLine);
   prefixStream(child.stderr, name, onLine);
+  liveChildren.add(child);
+  child.once('exit', () => liveChildren.delete(child));
+  child.once('error', () => liveChildren.delete(child));
   return child;
 }
 
@@ -92,27 +100,90 @@ export function killTree(child, signal = 'SIGTERM') {
 }
 
 export function runCommand(name, command, args, options = {}) {
+  const { timeoutMs = 0, signal, ...spawnOptions } = options;
+
   return new Promise((resolve, reject) => {
-    const child = spawnPrefixed(name, command, args, options);
-    child.once('error', reject);
-    child.once('exit', (code, signal) => {
-      if (code === 0) {
-        resolve();
+    const child = spawnPrefixed(name, command, args, spawnOptions);
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
+    let timeoutTimer;
+    let forceKillTimer;
+
+    const cleanup = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(forceKillTimer);
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const terminate = () => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      killTree(child, 'SIGTERM');
+      // A build that ignores SIGTERM must not keep the dev command alive.
+      forceKillTimer = setTimeout(() => killTree(child, 'SIGKILL'), 2_000);
+      forceKillTimer.unref?.();
+    };
+
+    function onAbort() {
+      if (settled) return;
+      aborted = true;
+      terminate();
+    }
+
+    child.once('error', (error) => {
+      finish(error);
+    });
+    child.once('exit', (code, exitSignal) => {
+      if (timedOut) {
+        finish(new Error(`${name} timed out after ${timeoutMs}ms`));
         return;
       }
-      reject(
+      if (aborted) {
+        finish(new Error(`${name} was aborted`));
+        return;
+      }
+      if (code === 0) {
+        finish();
+        return;
+      }
+      finish(
         new Error(
-          `${name} exited ${signal ? `with signal ${signal}` : `with code ${code ?? 'unknown'}`}`,
+          `${name} exited ${exitSignal ? `with signal ${exitSignal}` : `with code ${code ?? 'unknown'}`}`,
         ),
       );
     });
+
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }
+
+    if (timeoutMs > 0) {
+      timeoutTimer = setTimeout(() => {
+        if (settled) return;
+        timedOut = true;
+        terminate();
+      }, timeoutMs);
+      timeoutTimer.unref?.();
+    }
   });
 }
 
-export async function buildDesktop() {
+export async function buildDesktop({ timeoutMs = 120_000, signal } = {}) {
   await runCommand('build', npmExecutable(), ['run', 'build:desktop'], {
     // npm.cmd needs cmd.exe on Windows. The arguments here are fixed literals.
     shell: process.platform === 'win32',
+    timeoutMs,
+    signal,
   });
 }
 
