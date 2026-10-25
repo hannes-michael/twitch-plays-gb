@@ -114,8 +114,10 @@ Production selects the Twitch chat source when a channel is configured (from
 `--channel`/`TPG_CHANNEL` or the saved setup channel). It connects anonymously
 with `@twurple/chat`; no account token, OAuth secret, or stream key is stored or
 required. Twurple owns reconnect attempts, while `/api/chat` and the developer
-panel expose `connected`, `channel`, and a bounded `lastError`. Chat failures
-never stop the emulator or its input queue.
+panel expose `connected`, `channel`, and a bounded `lastError`. Source
+transitions are serialized, so overlapping channel changes close the older
+client and only the newest channel stays connected. Chat failures never stop the
+emulator or its input queue.
 
 Test mode always uses the deterministic fake source and never touches the
 network. Development defaults to fake too; `TPG_CHAT=twitch npm run dev` forces
@@ -130,8 +132,8 @@ same commands without `!`. Matching is case-insensitive. `mode`, `pause`,
 `resume`, and `save` are recognized as meta commands but are ignored in this
 cycle until the mode/pause/save work lands. Invalid messages, known bots
 (`nightbot`, `streamelements`, `streamlabs`, `moobot`, `fossabot`,
-`commanderroot`, `sery_bot`), bot badges, and self messages never enter the
-queue.
+`commanderroot`, `sery_bot`), Twitch bot badges (`bot-badge`/`twitchbot`),
+and self messages never enter the queue.
 
 Anarchy input is FIFO. A message can be dropped for a per-user cooldown,
 global accepted-inputs-per-second cap, a full queue, a stale queue entry at
@@ -140,9 +142,11 @@ emulator is running. Stopping the emulator keeps queued inputs; starting it
 again drains them (subject to staleness). `/api/input/state` exposes the mode,
 queue, recent events (bounded to 10), stats, last execution, and last drop.
 Input changes are broadcast on `/ws` as `{ "type": "input-state", "input": ... }`
-and new clients receive the current state immediately. The dashboard polls the
-state once per second, and the overlay consumes the WS messages for its mode,
-queue count, and recent-input ticker.
+and new clients receive the current state immediately. Input-state broadcasts
+are coalesced to at most 10 Hz with a trailing update, and text broadcasts skip
+clients whose WebSocket buffer exceeds 512 KiB. The dashboard polls the state
+once per second, and the overlay consumes the WS messages for its mode, queue
+count, and recent-input ticker.
 
 `--rom` sessions keep their last successful start options for Start and Restart
 requests without an explicit `romId`, so lifecycle controls never switch to the

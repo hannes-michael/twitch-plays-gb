@@ -100,10 +100,10 @@ test-only branch):
 test.use({
   emulatorRom: join(romDir, 'test_gb.gb'),
   serverEnv: {
-    TPG_INPUT_COOLDOWN_MS: '100',
+    TPG_INPUT_COOLDOWN_MS: '300',
     TPG_INPUT_MAX_QUEUE: '2',
     TPG_INPUT_MAX_PER_SECOND: '2',
-    TPG_INPUT_STALE_MS: '500',
+    TPG_INPUT_STALE_MS: '1500',
     TPG_HOLD_FRAMES: '2',
     TPG_RELEASE_FRAMES: '1',
   },
@@ -117,11 +117,13 @@ and pixels, growing counters, and the click-to-unmute audio path. Both wait on
 real status/counters with `expect.poll`; do not replace them with sleeps.
 `chat-input.spec.ts` drives the real GB ROM and fake chat source through the
 developer injection endpoint. It proves FIFO execution, per-user cooldown,
-global rate cap, queue overflow, queue drain after start, and the overlay input
-ticker. A second scenario proves bots/self messages, bare commands (with bare
-mode off), invalid text, and meta commands are ignored; it then disconnects the
-fake source through `/api/test/chat/outage`, checks `/api/chat` and debug status
-while video/audio counters keep growing, reconnects, and executes a command.
+global rate cap, queue overflow, queue drain after start, stale drop, and the
+overlay input ticker. A second scenario proves bots/self messages, bare commands
+(with bare mode off), invalid text, and meta commands are ignored; it then
+disconnects the fake source through `/api/test/chat/outage`, checks `/api/chat`
+and debug status while video/audio counters keep growing, reconnects, and
+executes a command. Focused safeguards cover Twitch `bot-badge`/known-bot
+mapping, overlapping chat-source transitions, and input-state WS coalescing.
 No test connects to real Twitch.
 
 `setup-import.spec.ts` is the first-run scenario: it checks the legal notice and
