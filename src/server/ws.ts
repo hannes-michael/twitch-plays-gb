@@ -2,6 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import WebSocket, { WebSocketServer } from 'ws';
+import type { InputState } from '../shared/input';
 import { MEDIA_PROTOCOL_VERSION } from '../shared/media-protocol';
 import type { ChatService } from './chat/service';
 import type { EmulatorService } from './emulator/service';
@@ -9,6 +10,11 @@ import type { InputService } from './input/service';
 import type { Logger } from './logger';
 import type { ServerState } from './state';
 import { APP_WS_PATH, upgradePathname } from './upgrade-paths';
+
+/** Slow OBS clients are skipped before their text buffer grows unbounded. */
+const TEXT_MAX_BUFFERED_BYTES = 512 * 1024;
+/** Input state is coalesced to at most 10 messages per second (trailing). */
+const INPUT_STATE_MIN_INTERVAL_MS = 100;
 
 export interface WebSocketServerOptions {
   /** Upgrade paths owned by another listener (Vite HMR in dev/test). */
@@ -76,8 +82,48 @@ export function createWebSocketServer(
   const broadcast = (payload: unknown): void => {
     const message = JSON.stringify(payload);
     for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) client.send(message);
+      if (client.readyState !== WebSocket.OPEN) continue;
+      if (client.bufferedAmount > TEXT_MAX_BUFFERED_BYTES) continue;
+
+      try {
+        client.send(message);
+      } catch (error) {
+        logger.debug(`text websocket send failed: ${(error as Error).message}`);
+      }
     }
+  };
+
+  let pendingInputState: InputState | null = null;
+  let inputStateTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastInputStateAt = 0;
+
+  const flushInputState = (): void => {
+    if (inputStateTimer) {
+      clearTimeout(inputStateTimer);
+      inputStateTimer = null;
+    }
+    const state = pendingInputState;
+    if (!state) return;
+
+    pendingInputState = null;
+    lastInputStateAt = Date.now();
+    broadcast({ type: 'input-state', input: state });
+  };
+
+  const queueInputState = (state: InputState): void => {
+    pendingInputState = state;
+    if (inputStateTimer) return;
+
+    const wait = INPUT_STATE_MIN_INTERVAL_MS - (Date.now() - lastInputStateAt);
+    if (wait <= 0) {
+      flushInputState();
+      return;
+    }
+
+    inputStateTimer = setTimeout(() => {
+      inputStateTimer = null;
+      flushInputState();
+    }, wait);
   };
 
   const unsubscribeEmulator = options.emulator.onStatusChange((emulatorStatus) => {
@@ -87,7 +133,7 @@ export function createWebSocketServer(
     broadcast({ type: 'chat', message });
   });
   const unsubscribeInput = options.input.subscribe((inputState) => {
-    broadcast({ type: 'input-state', input: inputState });
+    queueInputState(inputState);
   });
 
   httpServer.on('upgrade', handleUpgrade);
@@ -95,6 +141,11 @@ export function createWebSocketServer(
     unsubscribeEmulator();
     unsubscribeChat();
     unsubscribeInput();
+    if (inputStateTimer) {
+      clearTimeout(inputStateTimer);
+      inputStateTimer = null;
+    }
+    pendingInputState = null;
     httpServer.off('upgrade', handleUpgrade);
   });
 
