@@ -398,12 +398,15 @@ test.describe('saves and restore', () => {
       const key = stateKeyFromFiles(await readdir(join(dataDir, 'states')));
       const statePath = join(dataDir, 'states', `${key}.state`);
       const beforeQuitMtime = (await stat(statePath)).mtimeMs;
+      const beforeQuitCount = (await readStatus(server)).saveCount;
       expect(server.getLogs()).not.toContain('emulator state saved (quit)');
 
       await server.stop();
       stopped = true;
       expect(server.exitCode).toBe(0);
-      expect(server.getLogs()).toContain('emulator state saved (quit)');
+      expect(server.getLogs()).toContain(
+        `emulator state saved (quit) count=${beforeQuitCount + 1}`,
+      );
       expect((await stat(statePath)).mtimeMs).not.toBe(beforeQuitMtime);
     } finally {
       if (!stopped) await server.stop();

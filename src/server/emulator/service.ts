@@ -453,7 +453,7 @@ export class EmulatorService {
       this.saveInfo.saveCount += 1;
       this.saveInfo.lastSavedAt = new Date().toISOString();
       this.saveInfo.lastSaveError = null;
-      this.logger.info(`emulator state saved (${reason})`);
+      this.logger.info(`emulator state saved (${reason}) count=${this.saveInfo.saveCount}`);
       this.publish();
       return true;
     } catch (error) {
